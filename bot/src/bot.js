@@ -95,51 +95,123 @@ async function handleCommand(interaction) {
       return;
     }
     try {
-      // 需求变更：所有命令响应仅发起人可见
-      await interaction.deferReply({ ephemeral: true });
+      // 步骤1：确认交互，所有内容都在私信中
+      await interaction.deferReply({ flags: 'Ephemeral' });
 
       const response = await axios.post(`${API_URL}/battle`, {
         battle_type: 'fixed',
       });
-
       const battle = response.data;
-      // 存储对战信息和发起者的ID
+      
+      // 存储完整对战信息用于后续交互
       activeBattles.set(battle.battle_id, {
         ...battle,
-        authorId: interaction.user.id
+        authorId: interaction.user.id,
+        createdAt: new Date(), // 增加创建时间戳
       });
 
-      const statusRaw = battle.status;
-      const statusDisplay = (!statusRaw || statusRaw === 'pending_vote') ? '等待投票' : statusRaw;
-
+      // 步骤2：准备私信内容
       const embed = new EmbedBuilder()
         .setColor(0x0099FF)
         .setTitle('⚔️ 新的对战！')
-        .setDescription(`**提示词:**\n> ${battle.prompt}`)
-        .addFields(
-          { name: '模型 A 的回答', value: `\`\`\`${battle.response_a}\`\`\``, inline: false },
-          { name: '模型 B 的回答', value: `\`\`\`${battle.response_b}\`\`\``, inline: false }
-        )
-        .setFooter({ text: `对战 ID: ${battle.battle_id}\n状态: ${statusDisplay}` });
+        .setFooter({ text: `对战 ID: ${battle.battle_id}\n状态: 等待投票` });
 
-      const row = new ActionRowBuilder()
+      // --- 使用 Description 字段智能展示 ---
+      const baseText = `**提示词:**\n> ${battle.prompt}\n\n`;
+      let templateA = `**模型 A 的回答**\n\`\`\`\n%content%\n\`\`\`\n`;
+      let templateB = `**模型 B 的回答**\n\`\`\`\n%content%\n\`\`\``;
+      
+      const formattingLength = (baseText + templateA + templateB).replace(/%content%/g, '').length;
+      const availableLength = 4096 - formattingLength;
+      const minQuota = 1000; // 最小固定配额
+      
+      let responseA_display = battle.response_a;
+      let responseB_display = battle.response_b;
+      let truncated = false;
+      let is_A_truncated = false;
+      let is_B_truncated = false;
+
+      if ((responseA_display.length + responseB_display.length) > availableLength) {
+        truncated = true;
+        let remainingLength = availableLength;
+        
+        // 处理A的配额
+        if (responseA_display.length < minQuota) {
+          // A 小于最小配额，完整显示A
+          remainingLength -= responseA_display.length;
+        } else {
+          // A 大于最小配额，尝试分配一半可用空间
+          const allocatedToA = Math.floor(availableLength / 2);
+          if (responseA_display.length > allocatedToA) {
+            responseA_display = responseA_display.substring(0, allocatedToA - 3) + '...';
+            is_A_truncated = true;
+          }
+          remainingLength -= responseA_display.length;
+        }
+
+        // 处理B的配额
+        if (responseB_display.length > remainingLength) {
+           responseB_display = responseB_display.substring(0, remainingLength - 3) + '...';
+           is_B_truncated = true;
+        }
+      }
+
+      if (is_A_truncated) templateA = `**模型 A 的回答 (部分)**\n\`\`\`\n%content%\n\`\`\`\n`;
+      if (is_B_truncated) templateB = `**模型 B 的回答 (部分)**\n\`\`\`\n%content%\n\`\`\``;
+
+      const finalDescription = baseText +
+                               templateA.replace('%content%', responseA_display) +
+                               templateB.replace('%content%', responseB_display);
+
+      embed.setDescription(finalDescription.length > 4096 ? finalDescription.substring(0, 4093) + '...' : finalDescription);
+
+      if (truncated) {
+        let hint = '';
+        if (is_A_truncated && is_B_truncated) {
+          hint = '模型 A 和 模型 B 的回答都过长';
+        } else if (is_A_truncated) {
+          hint = '模型 A 的回答过长';
+        } else {
+          hint = '模型 B 的回答过长';
+        }
+        embed.addFields({ name: '提示', value: `${hint}，请点击下方按钮查看完整内容。` });
+      }
+
+      // 步骤3：准备按钮
+      const viewButtons = new ActionRowBuilder()
         .addComponents(
           new ButtonBuilder()
-            .setCustomId(`vote:${battle.battle_id}:model_a`)
-            .setLabel('投给模型 A')
-            .setStyle(ButtonStyle.Primary),
+            .setCustomId(`view_full:${battle.battle_id}:model_a`)
+            .setLabel('查看模型A全文')
+            .setStyle(ButtonStyle.Secondary),
           new ButtonBuilder()
-            .setCustomId(`vote:${battle.battle_id}:model_b`)
-            .setLabel('投给模型 B')
-            .setStyle(ButtonStyle.Primary),
-          new ButtonBuilder()
-            .setCustomId(`vote:${battle.battle_id}:tie`)
-            .setLabel('平局')
+            .setCustomId(`view_full:${battle.battle_id}:model_b`)
+            .setLabel('查看模型B全文')
             .setStyle(ButtonStyle.Secondary)
         );
 
-      // 需求变更：所有命令响应仅发起人可见
-      await interaction.editReply({ embeds: [embed], components: [row] });
+      const voteButtons = new ActionRowBuilder()
+        .addComponents(
+          new ButtonBuilder()
+            .setCustomId(`vote:${battle.battle_id}:model_a`)
+            .setLabel('👍 投给模型 A')
+            .setStyle(ButtonStyle.Primary),
+          new ButtonBuilder()
+            .setCustomId(`vote:${battle.battle_id}:model_b`)
+            .setLabel('👍 投给模型 B')
+            .setStyle(ButtonStyle.Primary),
+          new ButtonBuilder()
+            .setCustomId(`vote:${battle.battle_id}:tie`)
+            .setLabel('🤝 平局')
+            .setStyle(ButtonStyle.Secondary)
+        );
+      
+      // 步骤4：发送私信
+      await interaction.editReply({
+        embeds: [embed],
+        components: [viewButtons, voteButtons],
+        flags: 'Ephemeral'
+      });
 
     } catch (error) {
       console.error('创建对战时出错:', error);
@@ -302,69 +374,99 @@ async function handleCommand(interaction) {
 }
 
 async function handleButton(interaction) {
-  // 使用 : 作为分隔符，避免与 model_a 中的 _ 冲突
   const [action, battleId, choice] = interaction.customId.split(':');
 
-  if (action !== 'vote') return;
-
-  // 频道白名单检查（按钮）
-  if (!isChannelAllowed(interaction.channelId)) {
-    const tips = ALLOWED_CHANNEL_IDS.size
-      ? `此投票仅限在以下频道进行：${allowedMentionList()}`
-      : '此投票暂不可用。';
-    if (!interaction.deferred && !interaction.replied) {
-      await interaction.reply({ content: tips, ephemeral: true });
-    } else {
-      await interaction.followUp({ content: tips, ephemeral: true });
-    }
-    return;
+  if (action === 'view_full') {
+    await handleViewFullButton(interaction, battleId, choice);
+  } else if (action === 'vote') {
+    await handleVoteButton(interaction, battleId, choice);
   }
+}
 
-  // 无感优化：一次性确认并原地编辑为“处理中”（更快、更丝滑）
-  try {
-    const originalEmbed = interaction.message.embeds[0];
-    const processingEmbed = new EmbedBuilder(originalEmbed?.toJSON?.() ?? {})
-      .setColor(0x5865F2) // blurple
-      .setFooter({ text: `对战 ID: ${battleId}\n状态: 处理中...` });
-
-    const processingRows = interaction.message.components.map(row => {
-      const newRow = new ActionRowBuilder();
-      row.components.forEach(comp => newRow.addComponents(ButtonBuilder.from(comp).setDisabled(true)));
-      return newRow;
-    });
-
-    // interaction.update 会同时 ack 交互并原地编辑消息，比 deferUpdate+edit 更快
-    await interaction.update({
-      embeds: [processingEmbed],
-      components: processingRows
-    });
-  } catch (preEditErr) {
-    console.error('预处理编辑失败:', preEditErr);
-  }
+async function handleViewFullButton(interaction, battleId, modelChoice) {
+  await interaction.deferReply({ flags: 'Ephemeral' });
 
   const battleInfo = activeBattles.get(battleId);
   if (!battleInfo) {
-    // 原地编辑原始临时消息为失败状态（不发送新消息）
-    const originalEmbed = interaction.message.embeds[0];
-    const updatedEmbed = new EmbedBuilder(originalEmbed?.toJSON?.() ?? {})
-      .setColor(0xED4245)
-      .setFooter({ text: `对战 ID: ${battleId}\n状态: 投票失败` })
-      .addFields({ name: '投票失败', value: '找不到这场对战的信息，它可能已经过期或已完成。', inline: false });
+    await interaction.editReply({ content: '抱歉，这场对战的信息已过期。' });
+    return;
+  }
 
-    await interaction.webhook.editMessage(interaction.message.id, { embeds: [updatedEmbed] });
+  const content = modelChoice === 'model_a' ? battleInfo.response_a : battleInfo.response_b;
+  const modelName = modelChoice === 'model_a' ? '模型 A' : '模型 B';
+
+  try {
+    // 修正 API 端点，移除末尾的斜杠
+    const response = await axios.post('https://pasteme.cn/api/v3/paste', {
+      lang: 'plain',
+      content: content,
+      self_destruct: true,
+      expire_count: 1,
+      expire_second: 300
+    }, {
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (response.data && response.data.key) {
+      const pasteUrl = `https://pasteme.cn/api/v3/paste/${response.data.key}`;
+      // 在链接两边加上尖括号，防止 Discord 爬虫预取
+      await interaction.editReply({ content: `以下是 **${modelName}** 的完整内容链接（链接300秒后或查看一次后失效）：\n<${pasteUrl}>` });
+    } else {
+      // 如果 API 成功但没有返回 key，也作为错误处理
+      console.error('pasteme.cn API 响应异常:', response.data);
+      throw new Error('API did not return a key.');
+    }
+  } catch (error) {
+    // 增加更详细的错误日志
+    if (error.response) {
+      // 请求已发出，但服务器用状态码响应
+      console.error('pasteme.cn API Error Response:', {
+        data: error.response.data,
+        status: error.response.status,
+        headers: error.response.headers,
+      });
+    } else if (error.request) {
+      // 请求已发出，但没有收到响应
+      console.error('pasteme.cn API No Response:', error.request);
+    } else {
+      // 设置请求时发生错误
+      console.error('pasteme.cn Axios Setup Error:', error.message);
+    }
+    
+    try {
+      await interaction.editReply({ content: '生成临时链接失败，请稍后再试或联系管理员。' });
+    } catch (editError) {
+      // 如果 editReply 也失败了（例如交互已过期），尝试 followUp
+      console.error('Failed to editReply, attempting followUp:', editError);
+      await interaction.followUp({ content: '生成临时链接失败，请稍后再试或联系管理员。', flags: 'Ephemeral' });
+    }
+  }
+}
+
+async function handleVoteButton(interaction, battleId, choice) {
+  // 无感优化：一次性确认并原地编辑为“处理中”
+  try {
+    await interaction.deferUpdate();
+  } catch (preEditErr) {
+    console.error('投票预处理失败:', preEditErr);
+    // 如果 deferUpdate 失败，后续的 webhook 编辑可能会出问题，但我们仍然尝试
+  }
+  
+  const battleInfo = activeBattles.get(battleId);
+  if (!battleInfo) {
+    // 尝试编辑原始消息，如果失败也没关系
+    try {
+      await interaction.editReply({ content: '投票失败：找不到这场对战的信息，它可能已经过期或已完成。', components: [] });
+    } catch(e) {}
     return;
   }
 
   // 检查点击者是否为发起者
   if (interaction.user.id !== battleInfo.authorId) {
-    // 原地编辑原始临时消息为失败状态（不发送新消息）
-    const originalEmbed = interaction.message.embeds[0];
-    const updatedEmbed = new EmbedBuilder(originalEmbed?.toJSON?.() ?? {})
-      .setColor(0xED4245)
-      .setFooter({ text: `对战 ID: ${battleId}\n状态: 投票失败` })
-      .addFields({ name: '投票失败', value: '抱歉，只有发起这场对战的用户才能投票。', inline: false });
-
-    await interaction.webhook.editMessage(interaction.message.id, { embeds: [updatedEmbed] });
+    // 这里不能编辑消息，因为交互不属于该用户。所以我们什么都不做，或者可以发一条新的ephemeral消息
+    await interaction.followUp({ content: '抱歉，只有发起这场对战的用户才能投票。', flags: 'Ephemeral' });
     return;
   }
 
@@ -373,67 +475,56 @@ async function handleButton(interaction) {
       vote_choice: choice,
       discord_id: interaction.user.id
     };
-
-    console.log(`向 /vote/${battleId} 发送请求体:`, JSON.stringify(payload, null, 2));
+    
     const response = await axios.post(`${API_URL}/vote/${battleId}`, payload);
     const voteResult = response.data;
 
     if (voteResult.status === 'success') {
-      // 成功后直接“编辑原始临时消息”
-      activeBattles.delete(battleId);
+      // 投票成功后，启动一个5分钟的定时器来删除该对战信息
+      setTimeout(() => {
+        activeBattles.delete(battleId);
+        console.log(`[Cache Cleanup] Battle ${battleId} has been automatically deleted after 5 minutes.`);
+      }, 5 * 60 * 1000); // 5 minutes in milliseconds
 
+      // 获取原始 embed 并修改它
       const originalEmbed = interaction.message.embeds[0];
       const updatedEmbed = new EmbedBuilder(originalEmbed.toJSON())
         .setColor(0x57F287)
-        .setTitle('⚔️ 已完成的对战！')
-        .setFooter({ text: `对战 ID: ${battleId}\n状态: 已完成 | 获胜者: ${voteResult.winner}` })
-        .spliceFields(
-          0,
-          2,
-          {
-            name: `模型 A (${voteResult.model_a_name}) 的回答`,
-            value: battleInfo.response_a ? `\`\`\`${battleInfo.response_a}\`\`\`` : (originalEmbed.fields?.[0]?.value ?? 'N/A'),
-            inline: false
-          },
-          {
-            name: `模型 B (${voteResult.model_b_name}) 的回答`,
-            value: battleInfo.response_b ? `\`\`\`${battleInfo.response_b}\`\`\`` : (originalEmbed.fields?.[1]?.value ?? 'N/A'),
-            inline: false
-          }
+        .setTitle('⚔️ 对战已完成！')
+        .setFooter({ text: `对战 ID: ${battleId}\n状态: 已完成` })
+        .addFields(
+          { name: '获胜者', value: `**${voteResult.winner}**`, inline: false },
+          { name: '模型 A 名称', value: voteResult.model_a_name, inline: true },
+          { name: '模型 B 名称', value: voteResult.model_b_name, inline: true },
+          { name: '❗ 注意', value: '此对战的完整内容将在5分钟后销毁，请及时通过下方按钮查看或保存。' }
         );
 
-      // 将所有按钮禁用
-      const disabledRows = interaction.message.components.map(row => {
-        const newRow = new ActionRowBuilder();
-        row.components.forEach(comp => newRow.addComponents(ButtonBuilder.from(comp).setDisabled(true)));
-        return newRow;
-      });
+      // 保留查看按钮，禁用投票按钮
+      const originalComponents = interaction.message.components;
+      const updatedComponents = [];
 
-      await interaction.webhook.editMessage(interaction.message.id, { embeds: [updatedEmbed], components: disabledRows });
+      originalComponents.forEach(row => {
+        const newRow = new ActionRowBuilder();
+        row.components.forEach(comp => {
+          const newComp = ButtonBuilder.from(comp);
+          if (comp.customId.startsWith('vote:')) {
+            newComp.setDisabled(true);
+          }
+          newRow.addComponents(newComp);
+        });
+        updatedComponents.push(newRow);
+      });
+      
+      await interaction.editReply({ embeds: [updatedEmbed], components: updatedComponents });
 
     } else {
-      // 业务错误：编辑原始临时消息以显示失败原因（不发送新消息）
-      const originalEmbed = interaction.message.embeds[0];
-      const updatedEmbed = new EmbedBuilder(originalEmbed.toJSON())
-        .setColor(0xED4245)
-        .setFooter({ text: `对战 ID: ${battleId}\n状态: 投票失败` })
-        .addFields({ name: '投票失败', value: voteResult.message || '未知原因', inline: false });
-
-      await interaction.webhook.editMessage(interaction.message.id, { embeds: [updatedEmbed] });
+      // 业务错误
+      await interaction.editReply({ content: `投票失败：${voteResult.message || '未知原因'}` });
     }
 
   } catch (error) {
-    console.error(`为对战 ${battleId} 投票时出错:`, error.response ? error.response.data : error.message);
     const detail = error?.response?.data?.detail || error?.response?.data?.message || error?.message || '未知错误';
-
-    // 编辑原始临时消息，显示错误信息
-    const originalEmbed = interaction.message.embeds[0];
-    const updatedEmbed = new EmbedBuilder(originalEmbed.toJSON())
-      .setColor(0xED4245)
-      .setFooter({ text: `对战 ID: ${battleId}\n状态: 投票失败` })
-      .addFields({ name: '投票失败', value: String(detail), inline: false });
-
-    await interaction.webhook.editMessage(interaction.message.id, { embeds: [updatedEmbed] });
+    await interaction.editReply({ content: `投票失败：${String(detail)}` });
   }
 }
 
