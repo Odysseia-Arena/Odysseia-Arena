@@ -199,6 +199,105 @@ async function handleCommand(interaction) {
             await interaction.editReply({ content: '获取排行榜失败，请稍后再试。' });
         }
     }
+  } else if (interaction.commandName === 'battleinfo') {
+    // 频道白名单检查
+    if (!isChannelAllowed(interaction.channelId)) {
+      const tips = ALLOWED_CHANNEL_IDS.size
+        ? `此命令仅限在以下频道使用：${allowedMentionList()}`
+        : '此命令暂不可用。';
+      if (!interaction.deferred && !interaction.replied) {
+        await interaction.reply({ content: tips, ephemeral: true });
+      } else {
+        await interaction.followUp({ content: tips, ephemeral: true });
+      }
+      return;
+    }
+
+    try {
+      // 需求变更：所有命令响应仅发起人可见
+      await interaction.deferReply({ ephemeral: true });
+      const battleId = interaction.options.getString('battle_id', true);
+
+      const response = await axios.get(`${API_URL}/battle/${battleId}`);
+      const data = response.data;
+
+      const statusRaw = data.status;
+      const statusDisplay =
+        (!statusRaw || statusRaw === 'pending_vote') ? '等待投票'
+        : (statusRaw === 'completed' ? '已完成' : statusRaw);
+
+      const embed = new EmbedBuilder()
+        .setColor(statusRaw === 'completed' ? 0x57F287 : 0x0099FF)
+        .setTitle('⚔️ 对战详情')
+        .setDescription(`**提示词:**\n> ${data.prompt}`)
+        .addFields(
+          { name: '模型 A 的回答', value: data.response_a ? `\`\`\`${data.response_a}\`\`\`` : 'N/A', inline: false },
+          { name: '模型 B 的回答', value: data.response_b ? `\`\`\`${data.response_b}\`\`\`` : 'N/A', inline: false }
+        )
+        .setFooter({ text: `对战 ID: ${data.battle_id}\n状态: ${statusDisplay}` });
+
+      if (statusRaw === 'completed') {
+        embed.addFields(
+          { name: '模型 A 名称', value: data.model_a || 'N/A', inline: true },
+          { name: '模型 B 名称', value: data.model_b || 'N/A', inline: true },
+          { name: '获胜者', value: data.winner === 'model_a' ? '模型 A' : (data.winner === 'model_b' ? '模型 B' : (data.winner || 'N/A')), inline: false }
+        );
+      }
+
+      await interaction.editReply({ embeds: [embed] });
+    } catch (error) {
+      console.error('获取对战详情时出错:', error.response ? error.response.data : error.message);
+      const code = error?.response?.status;
+      const detail = error?.response?.data?.detail || error?.message || '未知错误';
+      const msg = code === 404 ? '未找到该对战，请确认对战 ID 是否正确。' : `获取对战详情失败：${detail}`;
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({ content: msg, ephemeral: true });
+      } else {
+        await interaction.editReply({ content: msg });
+      }
+    }
+
+  } else if (interaction.commandName === 'health') {
+    // 频道白名单检查
+    if (!isChannelAllowed(interaction.channelId)) {
+      const tips = ALLOWED_CHANNEL_IDS.size
+        ? `此命令仅限在以下频道使用：${allowedMentionList()}`
+        : '此命令暂不可用。';
+      if (!interaction.deferred && !interaction.replied) {
+        await interaction.reply({ content: tips, ephemeral: true });
+      } else {
+        await interaction.followUp({ content: tips, ephemeral: true });
+      }
+      return;
+    }
+
+    try {
+      // 需求变更：所有命令响应仅发起人可见
+      await interaction.deferReply({ ephemeral: true });
+      const response = await axios.get(`${API_URL}/health`);
+      const data = response.data;
+
+      const ok = data.status === 'ok';
+      const embed = new EmbedBuilder()
+        .setColor(ok ? 0x57F287 : 0xED4245)
+        .setTitle('🩺 系统健康检查')
+        .addFields(
+          { name: '状态', value: String(data.status || 'unknown'), inline: true },
+          { name: '模型数量', value: String(data.models_count ?? 'N/A'), inline: true },
+          { name: '固定提示词数量', value: String(data.fixed_prompts_count ?? 'N/A'), inline: true }
+        )
+        .setTimestamp();
+
+      await interaction.editReply({ embeds: [embed] });
+    } catch (error) {
+      console.error('获取健康检查时出错:', error.response ? error.response.data : error.message);
+      const detail = error?.response?.data?.detail || error?.message || '未知错误';
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({ content: `获取健康检查失败：${detail}`, ephemeral: true });
+      } else {
+        await interaction.editReply({ content: `获取健康检查失败：${detail}` });
+      }
+    }
   }
 }
 

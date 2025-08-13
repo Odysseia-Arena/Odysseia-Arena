@@ -15,6 +15,26 @@ const commands = [
     description: '查看模型排行榜',
     default_member_permissions: '0',
     dm_permission: false,
+  },
+  {
+    name: 'battleinfo',
+    description: '查看指定对战详情',
+    options: [
+      {
+        name: 'battle_id',
+        description: '对战ID',
+        type: ApplicationCommandOptionType.String,
+        required: true,
+      }
+    ],
+    default_member_permissions: '0',
+    dm_permission: false,
+  },
+  {
+    name: 'health',
+    description: '检查后端健康状态',
+    default_member_permissions: '0',
+    dm_permission: false,
   }
 ];
 
