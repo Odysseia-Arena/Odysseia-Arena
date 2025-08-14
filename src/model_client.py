@@ -7,16 +7,15 @@ import time
 from typing import Optional
 from dotenv import load_dotenv
 
+# 在模块加载时执行一次，确保.env文件被找到
 load_dotenv()
 
-API_ENDPOINT = os.getenv("API_ENDPOINT", "https://api.openai.com/v1/chat/completions")
-API_KEY = os.getenv("API_KEY", "")
 MAX_RETRIES = 2  # 最大重试次数（包括首次请求）
 RETRY_DELAY = 1  # 重试间隔（秒）
 
 def call_model(model: str, prompt: str) -> str:
     """
-    调用模型API生成响应，包含空响应重试机制
+    调用模型API生成响应，包含空响应重试机制和配置热更新
     
     Args:
         model: 模型名称
@@ -29,11 +28,16 @@ def call_model(model: str, prompt: str) -> str:
         ValueError: API_KEY未设置或模型持续返回空响应
         Exception: API调用失败
     """
-    if not API_KEY:
+    # 热更新：每次调用时都强制重新加载.env文件
+    load_dotenv(override=True)
+    api_endpoint = os.getenv("API_ENDPOINT", "https://api.openai.com/v1/chat/completions")
+    api_key = os.getenv("API_KEY", "")
+
+    if not api_key:
         raise ValueError("API_KEY 未设置，请在 .env 文件中配置")
     
     headers = {
-        "Authorization": f"Bearer {API_KEY}",
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
     
@@ -52,7 +56,7 @@ def call_model(model: str, prompt: str) -> str:
     for attempt in range(MAX_RETRIES):
         try:
             response = requests.post(
-                API_ENDPOINT,
+                api_endpoint,
                 headers=headers,
                 json=payload,
                 timeout=60
