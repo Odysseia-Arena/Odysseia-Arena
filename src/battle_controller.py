@@ -2,13 +2,11 @@
 import random
 import uuid
 import time
+import asyncio
 from typing import Dict, Tuple
 from . import config
 from . import storage
-
-# 加载固定提示词响应缓存
-# 这个操作只在模块加载时执行一次，提高效率
-FIXED_RESPONSES_CACHE = storage.get_fixed_prompt_responses()
+from . import model_client
 
 def select_random_models(available_models: list) -> Tuple[str, str]:
     """随机选择两个不同的模型进行对战"""
@@ -19,24 +17,7 @@ def select_random_models(available_models: list) -> Tuple[str, str]:
     models = random.sample(available_models, 2)
     return models[0], models[1]
 
-def get_fixed_prompt_response(prompt: str, model_name: str) -> str:
-    """
-    从缓存中获取固定提示词的响应。
-    (第一阶段的核心逻辑，替代实时API调用)
-    """
-    if prompt not in FIXED_RESPONSES_CACHE:
-        # 这通常不应该发生，因为提示词是从config.FIXED_PROMPTS中选择的
-        raise ValueError(f"找不到提示词 '{prompt}' 的缓存响应")
-    
-    model_responses = FIXED_RESPONSES_CACHE[prompt]
-    
-    if model_name not in model_responses:
-        # 如果某个模型没有该提示词的响应
-        raise ValueError(f"模型 '{model_name}' 没有针对该提示词的缓存响应")
-        
-    return model_responses[model_name]
-
-def create_battle(battle_type: str, custom_prompt: str = None) -> Dict:
+async def create_battle(battle_type: str, custom_prompt: str = None) -> Dict:
     """
     创建一场新的对战。
 
@@ -47,9 +28,11 @@ def create_battle(battle_type: str, custom_prompt: str = None) -> Dict:
     
     # 1. 选择提示词
     if battle_type == "fixed":
-        if not config.FIXED_PROMPTS:
-             raise ValueError("固定提示词列表为空。")
-        prompt = random.choice(config.FIXED_PROMPTS)
+        # 热更新：每次都从文件加载提示词
+        fixed_prompts = config.load_fixed_prompts()
+        if not fixed_prompts:
+             raise ValueError("固定提示词列表为空或无法加载。")
+        prompt = random.choice(fixed_prompts)
     elif battle_type == "custom":
         # 第二阶段功能（暂时隐藏，但逻辑保留）
         if not custom_prompt:
@@ -61,17 +44,16 @@ def create_battle(battle_type: str, custom_prompt: str = None) -> Dict:
     # 2. 选择模型
     model_a_name, model_b_name = select_random_models(config.AVAILABLE_MODELS)
 
-    # 3. 获取模型响应
-    if battle_type == "fixed":
-        # 第一阶段：使用缓存响应
-        response_a = get_fixed_prompt_response(prompt, model_a_name)
-        response_b = get_fixed_prompt_response(prompt, model_b_name)
-    else:
-        # 第二阶段：需要实现实时API调用（此处留空，遵循YAGNI原则）
-        # 在实际实现中，这里会调用 make_api_call
-        # response_a = call_model_api(model_a_name, prompt)
-        response_a = f"[第二阶段占位符] {model_a_name} 的实时响应。"
-        response_b = f"[第二阶段占位符] {model_b_name} 的实时响应。"
+    # 3. 获取模型响应（实时调用API）
+    # 使用asyncio.gather并发执行同步的API调用
+    loop = asyncio.get_running_loop()
+    
+    # 在线程池中运行同步函数
+    task_a = loop.run_in_executor(None, model_client.call_model, model_a_name, prompt)
+    task_b = loop.run_in_executor(None, model_client.call_model, model_b_name, prompt)
+    
+    # 等待两个API调用完成
+    response_a, response_b = await asyncio.gather(task_a, task_b)
 
     # 4. 创建对战记录
     battle_id = str(uuid.uuid4())

@@ -12,7 +12,6 @@ from . import battle_controller
 from . import vote_controller
 from . import elo_rating
 from .logger_config import log_event, log_error, logger
-from .fixed_prompt_response_generator import generate_fixed_prompt_responses
 
 # 初始化FastAPI应用
 app = FastAPI(title="创意写作大模型竞技场后端", version="1.0.0")
@@ -46,24 +45,14 @@ async def startup_event():
         # 初始化存储（创建文件和初始评分）
         storage.initialize_storage()
         
-        # 检查并生成固定提示词响应文件
-        import os
-        if not os.path.exists(config.FIXED_PROMPT_RESPONSES_FILE):
-            logger.info("检测到固定提示词响应文件不存在，需要生成...")
-            # 询问用户选择
-            success = generate_fixed_prompt_responses(auto_confirm=False)
-            if not success:
-                logger.error("固定提示词响应文件生成失败或用户取消")
-                logger.error("服务器无法启动：缺少必要的固定提示词响应文件")
-                raise Exception("Server startup failed: Fixed prompt responses file is required but not generated.")
-            logger.info("固定提示词响应文件生成成功")
-        
+        # 在启动时加载一次以获取数量
+        prompts_count = len(config.load_fixed_prompts())
         log_event("SERVER_STARTUP", {
-            "status": "success", 
+            "status": "success",
             "models_loaded": len(config.AVAILABLE_MODELS),
-            "fixed_prompts_loaded": len(config.FIXED_PROMPTS)
+            "fixed_prompts_loaded": prompts_count
         })
-        logger.info(f"服务器启动成功！已加载 {len(config.AVAILABLE_MODELS)} 个模型，{len(config.FIXED_PROMPTS)} 个固定提示词。")
+        logger.info(f"服务器启动成功！已加载 {len(config.AVAILABLE_MODELS)} 个模型，{prompts_count} 个固定提示词。")
     except Exception as e:
         log_error(f"存储初始化失败: {e}", {"step": "initialize_storage"})
         logger.critical("服务器启动失败：存储初始化错误。")
@@ -89,13 +78,9 @@ async def create_battle(request_body: BattleRequest):
     """创建新的对战"""
     try:
         # 第一阶段限制：只支持 fixed
-        if request_body.battle_type != "fixed":
-            # 虽然功能在controller中已实现，但根据要求暂时隐藏第二阶段
-            log_event("BATTLE_CREATION_REJECTED", {"reason": "Custom type disabled", "type": request_body.battle_type})
-            # 返回400错误，明确告知客户端当前不支持
-            raise HTTPException(status_code=400, detail="目前只支持固定提示词对战 (battle_type='fixed')。")
-
-        battle_details = battle_controller.create_battle(
+        # 实时对战逻辑现在由 battle_controller 处理
+        # battle_type 和 custom_prompt 的验证也移到 controller 中
+        battle_details = await battle_controller.create_battle(
             battle_type=request_body.battle_type,
             custom_prompt=request_body.custom_prompt
         )

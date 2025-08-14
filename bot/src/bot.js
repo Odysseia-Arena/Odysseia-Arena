@@ -95,8 +95,11 @@ async function handleCommand(interaction) {
       return;
     }
     try {
-      // 步骤1：确认交互，所有内容都在私信中
-      await interaction.deferReply({ flags: 'Ephemeral' });
+      // 步骤1：立即回复一个等待消息
+      await interaction.reply({
+        content: `<@${interaction.user.id}>\n**创建对战中：** 这通常需要一些时间，机器人会在创建成功后通知你。`,
+        ephemeral: true
+      });
 
       const response = await axios.post(`${API_URL}/battle`, {
         battle_type: 'fixed',
@@ -117,7 +120,8 @@ async function handleCommand(interaction) {
         .setFooter({ text: `对战 ID: ${battle.battle_id}\n状态: 等待投票` });
 
       // --- 使用 Description 字段智能展示 ---
-      const baseText = `**提示词:**\n> ${battle.prompt}\n\n`;
+      const quotedPrompt = battle.prompt.split('\n').map(line => `> ${line}`).join('\n');
+      const baseText = `用户提示词：\n${quotedPrompt}\n\n`; 
       let templateA = `**模型 A 的回答**\n\`\`\`\n%content%\n\`\`\`\n`;
       let templateB = `**模型 B 的回答**\n\`\`\`\n%content%\n\`\`\``;
       
@@ -206,12 +210,16 @@ async function handleCommand(interaction) {
             .setStyle(ButtonStyle.Secondary)
         );
       
-      // 步骤4：发送私信
-      await interaction.editReply({
+      // 步骤4：使用 followUp 发送包含对战结果的新私信
+      await interaction.followUp({
+        content: `<@${interaction.user.id}>`, // 在 content 中提及用户以触发通知
         embeds: [embed],
         components: [viewButtons, voteButtons],
-        flags: 'Ephemeral'
+        ephemeral: true
       });
+
+      // (可选) 如果你想删除第一条等待消息，可以取消下面的注释
+      // await interaction.deleteReply();
 
     } catch (error) {
       console.error('创建对战时出错:', error);

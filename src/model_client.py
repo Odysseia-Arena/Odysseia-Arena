@@ -43,7 +43,8 @@ def call_model(model: str, prompt: str) -> str:
             {"role": "user", "content": prompt}
         ],
         "max_tokens": 500,
-        "temperature": 0.7
+        "temperature": 0.7,
+        "stream": False
     }
     
     last_error = None

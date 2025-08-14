@@ -47,11 +47,9 @@ def load_fixed_prompts():
 
 # 可用模型列表
 AVAILABLE_MODELS = load_models()
-# 固定提示词列表 (第一阶段使用)
-FIXED_PROMPTS = load_fixed_prompts()
 
 # 配置验证函数
-def validate_configuration(): 
+def validate_configuration():
     """验证系统配置是否满足最低运行要求"""
     errors = []
     
@@ -59,9 +57,10 @@ def validate_configuration():
     if len(AVAILABLE_MODELS) < 2:
         errors.append(f"系统至少需要2个模型才能运行对战")
     
-    # 第一阶段功能需要固定提示词
-    if not FIXED_PROMPTS:
-        errors.append("第一阶段功能需要至少一个固定提示词")
+    # 检查固定提示词文件是否存在且有效
+    prompts = load_fixed_prompts()
+    if not prompts:
+        errors.append("固定提示词文件不存在、为空或格式错误")
     
     # 检查必要的目录是否存在
     if not os.path.exists(CONFIG_DIR):

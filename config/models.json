@@ -1,8 +1,6 @@
 {
     "models": [
-        "deepseek-chat",
-        "gemini-2.5-pro",
-        "gemini-2.5-flash",
-        "gpt-4.1"
+        "gpt-5",
+        "gemini-2.5-pro"
     ]
 }
