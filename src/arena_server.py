@@ -170,7 +170,17 @@ async def get_battle_details(battle_id: str):
             "status": battle["status"]
         }
     
-    # 如果比赛已完成，返回完整详情（包括模型名称和结果）
+    # 如果比赛已完成，转换模型ID为显示名称后返回
+    model_a_id = battle.get("model_a")
+    model_b_id = battle.get("model_b")
+
+    model_a_obj = config.get_model_by_id(model_a_id)
+    model_b_obj = config.get_model_by_id(model_b_id)
+
+    # 替换为显示名称，如果找不到模型则回退到ID
+    battle["model_a"] = model_a_obj["name"] if model_a_obj else model_a_id
+    battle["model_b"] = model_b_obj["name"] if model_b_obj else model_b_id
+    
     return battle
 
 # 健康检查端点

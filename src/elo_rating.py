@@ -83,7 +83,11 @@ def generate_leaderboard() -> List[Dict]:
     scores = storage.get_model_scores()
     leaderboard = []
 
-    for model_name, stats in scores.items():
+    for model_id, stats in scores.items():
+        # 根据模型ID获取模型对象以显示其名称
+        model_obj = config.get_model_by_id(model_id)
+        display_name = model_obj['name'] if model_obj else model_id
+
         rating = stats["rating"]
         battles = stats["battles"]
         wins = stats["wins"]
@@ -93,7 +97,7 @@ def generate_leaderboard() -> List[Dict]:
         win_rate = ((wins + 0.5 * ties) / battles * 100) if battles > 0 else 0
 
         leaderboard.append({
-            "model_name": model_name,
+            "model_name": display_name,
             "rating": rating,
             "battles": battles,
             "wins": wins,
