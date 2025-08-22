@@ -117,18 +117,26 @@ def submit_vote(battle_id: str, vote_choice: str, discord_id: str) -> Dict:
         # 捕获自定义异常，返回错误信息（此时事务已回滚）
         return {"status": "error", "message": str(e)}
 
+    # 根据模型ID获取模型对象，以便返回显示名称'name'
+    model_a_obj = config.get_model_by_id(model_a)
+    model_b_obj = config.get_model_by_id(model_b)
+
+    # 如果找不到模型对象（例如模型配置已被删除），则优雅地回退到ID
+    model_a_display_name = model_a_obj['name'] if model_a_obj else model_a
+    model_b_display_name = model_b_obj['name'] if model_b_obj else model_b
+    
     # 确定获胜者名称以返回给用户
     if winner == "model_a":
-        winner_name = model_a
+        winner_name = model_a_display_name
     elif winner == "model_b":
-        winner_name = model_b
+        winner_name = model_b_display_name
     else:
         winner_name = "Tie"
 
     return {
-        "status": "success", 
+        "status": "success",
         "message": "投票成功提交。",
         "winner": winner_name,
-        "model_a_name": model_a,
-        "model_b_name": model_b
+        "model_a_name": model_a_display_name,
+        "model_b_name": model_b_display_name
     }

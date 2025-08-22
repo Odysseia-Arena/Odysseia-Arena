@@ -139,9 +139,10 @@ def initialize_storage():
         existing_models = {row["model_name"] for row in cursor.fetchall()}
         
         models_to_insert = []
-        for model in config.AVAILABLE_MODELS:
-            if model not in existing_models:
-                models_to_insert.append((model, config.DEFAULT_ELO_RATING))
+        for model_obj in config.AVAILABLE_MODELS:
+            model_id = model_obj['id']
+            if model_id not in existing_models:
+                models_to_insert.append((model_id, config.DEFAULT_ELO_RATING))
         
         if models_to_insert:
             cursor.executemany("INSERT INTO models (model_name, rating) VALUES (?, ?)", models_to_insert)

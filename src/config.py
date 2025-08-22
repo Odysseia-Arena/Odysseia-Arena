@@ -20,14 +20,24 @@ USER_MAX_VOTES_PER_HOUR = 100 # 每个用户每小时最大投票数（设高一
 
 
 def load_models():
-    """从 models.json 加载可用模型列表"""
+    """从 models.json 加载可用模型对象列表"""
     if not os.path.exists(MODELS_FILE):
         print(f"错误: 找不到模型配置文件 {MODELS_FILE}")
         return []
     try:
         with open(MODELS_FILE, 'r', encoding='utf-8') as f:
             data = json.load(f)
-            return data.get("models", [])
+            # 验证基本结构
+            models = data.get("models", [])
+            if not isinstance(models, list):
+                print(f"错误: {MODELS_FILE} 中的 'models' 应该是一个列表")
+                return []
+            # 验证每个模型对象是否包含'id'和'name'
+            for model in models:
+                if "id" not in model or "name" not in model:
+                    print(f"警告: 跳过一个无效的模型条目，因为它缺少'id'或'name'字段。")
+                    continue
+            return models
     except json.JSONDecodeError:
         print(f"错误: 无法解析 {MODELS_FILE}")
         return []
@@ -47,6 +57,12 @@ def load_fixed_prompts():
 
 # 可用模型列表
 AVAILABLE_MODELS = load_models()
+# 创建一个从 model_id 到 model 对象的快速查找映射
+MODELS_BY_ID = {model['id']: model for model in AVAILABLE_MODELS}
+
+def get_model_by_id(model_id: str):
+    """根据ID获取模型对象"""
+    return MODELS_BY_ID.get(model_id)
 
 # 配置验证函数
 def validate_configuration():
