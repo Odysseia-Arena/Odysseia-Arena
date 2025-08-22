@@ -9,13 +9,26 @@ from . import storage
 from . import model_client
 
 def select_random_models(available_models: list) -> Tuple[dict, dict]:
-    """随机选择两个不同的模型对象进行对战"""
+    """根据权重随机选择两个不同的模型对象进行对战"""
     if len(available_models) < 2:
         raise ValueError("可用模型少于两个，无法开始对战。")
+
+    # 提取模型和对应的权重，如果模型没有权重，则默认为1.0
+    models = available_models
+    weights = [model.get("weight", 1.0) for model in models]
     
-    # 使用random.sample来选择两个不重复的模型对象
-    models = random.sample(available_models, 2)
-    return models[0], models[1]
+    # 检查权重是否都为非正数，如果是，则无法进行加权抽样
+    if all(w <= 0 for w in weights):
+        # 在这种情况下，退回到均匀抽样
+        model_a, model_b = random.sample(models, 2)
+        return model_a, model_b
+
+    # 使用 random.choices 进行加权抽样，一次性抽取两个
+    # 注意：choices 可能会选出两个相同的模型，所以需要循环直到选出两个不同的
+    while True:
+        chosen_models = random.choices(models, weights=weights, k=2)
+        if chosen_models[0]['id'] != chosen_models[1]['id']:
+            return chosen_models[0], chosen_models[1]
 
 async def create_battle(battle_type: str, custom_prompt: str = None) -> Dict:
     """
