@@ -61,8 +61,10 @@ async def create_battle(battle_type: str, custom_prompt: str = None) -> Dict:
         "battle_id": battle_id,
         "battle_type": battle_type,
         "prompt": prompt,
-        "model_a": model_a['id'], # 存储模型的 ID
+        "model_a": model_a['id'], # 存储模型ID
         "model_b": model_b['id'],
+        "model_a_name": model_a['name'], # 存储当时的显示名称
+        "model_b_name": model_b['name'],
         "response_a": response_a,
         "response_b": response_b,
         "status": "pending_vote", # 状态：pending_vote（等待投票）, completed（已完成）

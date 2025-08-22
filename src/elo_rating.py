@@ -84,10 +84,8 @@ def generate_leaderboard() -> List[Dict]:
     leaderboard = []
 
     for model_id, stats in scores.items():
-        # 根据模型ID获取模型对象以显示其名称
-        model_obj = config.get_model_by_id(model_id)
-        display_name = model_obj['name'] if model_obj else model_id
-
+        # 直接从数据库记录中获取模型名称
+        display_name = stats.get("model_name", model_id)
         rating = stats["rating"]
         battles = stats["battles"]
         wins = stats["wins"]

@@ -86,13 +86,13 @@ def submit_vote(battle_id: str, vote_choice: str, discord_id: str) -> Dict:
 
             # 4. 处理投票结果
             winner = vote_choice
-            model_a = battle["model_a"]
-            model_b = battle["model_b"]
+            model_a_id = battle["model_a_id"]
+            model_b_id = battle["model_b_id"]
 
             # 5. 更新ELO评分
             # elo_rating.process_battle_result 中的 RMW 操作现在是安全的，
             # 因为它通过 threading.local 自动参与到了当前的事务中。
-            elo_rating.process_battle_result(model_a, model_b, winner)
+            elo_rating.process_battle_result(model_a_id, model_b_id, winner)
 
             # 6. 更新对战记录状态为已完成
             updates = {
@@ -117,19 +117,15 @@ def submit_vote(battle_id: str, vote_choice: str, discord_id: str) -> Dict:
         # 捕获自定义异常，返回错误信息（此时事务已回滚）
         return {"status": "error", "message": str(e)}
 
-    # 根据模型ID获取模型对象，以便返回显示名称'name'
-    model_a_obj = config.get_model_by_id(model_a)
-    model_b_obj = config.get_model_by_id(model_b)
-
-    # 如果找不到模型对象（例如模型配置已被删除），则优雅地回退到ID
-    model_a_display_name = model_a_obj['name'] if model_a_obj else model_a
-    model_b_display_name = model_b_obj['name'] if model_b_obj else model_b
+    # 直接从 battle 记录中获取历史名称
+    model_a_name = battle["model_a_name"]
+    model_b_name = battle["model_b_name"]
     
     # 确定获胜者名称以返回给用户
     if winner == "model_a":
-        winner_name = model_a_display_name
+        winner_name = model_a_name
     elif winner == "model_b":
-        winner_name = model_b_display_name
+        winner_name = model_b_name
     else:
         winner_name = "Tie"
 
@@ -137,6 +133,6 @@ def submit_vote(battle_id: str, vote_choice: str, discord_id: str) -> Dict:
         "status": "success",
         "message": "投票成功提交。",
         "winner": winner_name,
-        "model_a_name": model_a_display_name,
-        "model_b_name": model_b_display_name
+        "model_a_name": model_a_name,
+        "model_b_name": model_b_name
     }

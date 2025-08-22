@@ -95,7 +95,8 @@ def initialize_storage():
         # 1. 模型评分表 (models)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS models (
-                model_name TEXT PRIMARY KEY,
+                model_id TEXT PRIMARY KEY,
+                model_name TEXT NOT NULL,
                 rating INTEGER NOT NULL,
                 battles INTEGER DEFAULT 0 NOT NULL,
                 wins INTEGER DEFAULT 0 NOT NULL,
@@ -109,8 +110,10 @@ def initialize_storage():
                 battle_id TEXT PRIMARY KEY,
                 battle_type TEXT NOT NULL,
                 prompt TEXT NOT NULL,
-                model_a TEXT NOT NULL REFERENCES models(model_name),
-                model_b TEXT NOT NULL REFERENCES models(model_name),
+                model_a_id TEXT NOT NULL REFERENCES models(model_id),
+                model_b_id TEXT NOT NULL REFERENCES models(model_id),
+                model_a_name TEXT NOT NULL,
+                model_b_name TEXT NOT NULL,
                 response_a TEXT NOT NULL,
                 response_b TEXT NOT NULL,
                 status TEXT NOT NULL, -- pending_vote, completed
@@ -134,35 +137,50 @@ def initialize_storage():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_voting_history_timestamp_desc ON voting_history (timestamp DESC);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_voting_history_user_hash ON voting_history (user_hash);")
 
-        # 初始化模型评分数据
-        cursor.execute("SELECT model_name FROM models")
-        existing_models = {row["model_name"] for row in cursor.fetchall()}
+        # --- 模型数据同步 ---
+        # 1. 插入新模型
+        cursor.execute("SELECT model_id FROM models")
+        existing_model_ids = {row["model_id"] for row in cursor.fetchall()}
         
         models_to_insert = []
         for model_obj in config.AVAILABLE_MODELS:
             model_id = model_obj['id']
-            if model_id not in existing_models:
-                models_to_insert.append((model_id, config.DEFAULT_ELO_RATING))
+            if model_id not in existing_model_ids:
+                models_to_insert.append((model_id, model_obj['name'], config.DEFAULT_ELO_RATING))
         
         if models_to_insert:
-            cursor.executemany("INSERT INTO models (model_name, rating) VALUES (?, ?)", models_to_insert)
+            cursor.executemany("INSERT INTO models (model_id, model_name, rating) VALUES (?, ?, ?)", models_to_insert)
+
+        # 2. 更新现有模型的名称 (实现名称热更新)
+        models_to_update = []
+        for model_obj in config.AVAILABLE_MODELS:
+            models_to_update.append((model_obj['name'], model_obj['id']))
+        
+        if models_to_update:
+            cursor.executemany("UPDATE models SET model_name = ? WHERE model_id = ?", models_to_update)
 
 # --- 对战记录管理 ---
 # (所有这些函数现在都使用 db_access()，因此它们会自动参与活动事务或自动提交)
 
 def save_battle_record(battle_id: str, record: Dict):
     """保存新的对战记录"""
+    # 为了兼容旧代码，将model_a/b重命名为model_a/b_id
+    record['model_a_id'] = record.pop('model_a')
+    record['model_b_id'] = record.pop('model_b')
+
     with db_access() as conn:
         conn.execute("""
             INSERT INTO battles (
-                battle_id, battle_type, prompt, model_a, model_b, 
+                battle_id, battle_type, prompt,
+                model_a_id, model_b_id, model_a_name, model_b_name,
                 response_a, response_b, status, winner, timestamp
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             record["battle_id"], record["battle_type"], record["prompt"],
-            record["model_a"], record["model_b"], record["response_a"],
-            record["response_b"], record["status"], record.get("winner"),
-            record["timestamp"]
+            record["model_a_id"], record["model_b_id"],
+            record["model_a_name"], record["model_b_name"],
+            record["response_a"], record["response_b"],
+            record["status"], record.get("winner"), record["timestamp"]
         ))
 
 def get_battle_record(battle_id: str) -> Dict | None:
@@ -195,35 +213,31 @@ def get_model_scores() -> Dict[str, Dict]:
     """获取所有模型的评分"""
     scores = {}
     with db_access() as conn:
-        # 在事务中读取，确保读取到的是一致的状态快照
         cursor = conn.execute("SELECT * FROM models")
         for row in cursor.fetchall():
-            # 重建原始JSON的嵌套结构以兼容elo_rating.py
-            model_name = row["model_name"]
-            # 转换为字典并移除冗余的 model_name 键
+            model_id = row["model_id"]
             stats = dict(row)
-            if "model_name" in stats:
-                 del stats["model_name"]
-            scores[model_name] = stats
+            if "model_id" in stats:
+                 del stats["model_id"]
+            scores[model_id] = stats
     return scores
 
 def save_model_scores(scores: Dict[str, Dict]):
     """
     保存更新后的模型评分。
-    当在 storage.transaction() 内部调用时（例如通过 elo_rating.py），此操作是安全的，
-    因为整个 RMW 周期都在该事务中执行。
     """
     data_to_update = []
-    for model_name, stats in scores.items():
+    for model_id, stats in scores.items():
         data_to_update.append((
-            stats["rating"], stats["battles"], stats["wins"], stats.get("ties", 0), model_name
+            stats["model_name"], stats["rating"], stats["battles"],
+            stats["wins"], stats.get("ties", 0), model_id
         ))
 
     with db_access() as conn:
         conn.executemany("""
-            UPDATE models SET 
-            rating = ?, battles = ?, wins = ?, ties = ?
-            WHERE model_name = ?
+            UPDATE models SET
+            model_name = ?, rating = ?, battles = ?, wins = ?, ties = ?
+            WHERE model_id = ?
         """, data_to_update)
 
 # --- 投票记录管理 ---
