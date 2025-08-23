@@ -82,7 +82,8 @@ async def create_battle(battle_type: str, custom_prompt: str = None) -> Dict:
         "response_b": response_b,
         "status": "pending_vote", # 状态：pending_vote（等待投票）, completed（已完成）
         "winner": None,
-        "timestamp": time.time()
+        "timestamp": time.time(),
+        "created_at": time.time()
     }
 
     # 5. 保存记录

@@ -58,7 +58,6 @@ def call_model(model: dict, prompt: str) -> str:
         "messages": [
             {"role": "user", "content": prompt}
         ],
-        "max_tokens": 8000,
         "temperature": 1.0,
         "stream": False
     }

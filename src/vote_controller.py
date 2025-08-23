@@ -76,7 +76,7 @@ def submit_vote(battle_id: str, vote_choice: str, discord_id: str) -> Dict:
             battle = storage.get_battle_record(battle_id)
             if not battle:
                 # 抛出异常将触发回滚
-                raise FileNotFoundError("找不到该对战记录。")
+                raise FileNotFoundError("找不到该对战记录，可能已超时被自动销毁。")
 
             # 2. 检查对战状态 (关键的并发检查)
             # 如果另一个并发请求已经完成了投票，这里的检查会失败

@@ -118,7 +118,8 @@ def initialize_storage():
                 response_b TEXT NOT NULL,
                 status TEXT NOT NULL, -- pending_vote, completed
                 winner TEXT, -- model_a, model_b, tie
-                timestamp REAL NOT NULL
+                timestamp REAL NOT NULL,
+                created_at REAL NOT NULL
             );
         """)
 
@@ -173,14 +174,15 @@ def save_battle_record(battle_id: str, record: Dict):
             INSERT INTO battles (
                 battle_id, battle_type, prompt,
                 model_a_id, model_b_id, model_a_name, model_b_name,
-                response_a, response_b, status, winner, timestamp
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                response_a, response_b, status, winner, timestamp, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             record["battle_id"], record["battle_type"], record["prompt"],
             record["model_a_id"], record["model_b_id"],
             record["model_a_name"], record["model_b_name"],
             record["response_a"], record["response_b"],
-            record["status"], record.get("winner"), record["timestamp"]
+            record["status"], record.get("winner"), record["timestamp"],
+            record["created_at"]
         ))
 
 def get_battle_record(battle_id: str) -> Dict | None:
@@ -206,6 +208,21 @@ def update_battle_record(battle_id: str, updates: Dict):
     with db_access() as conn:
         cursor = conn.execute(f"UPDATE battles SET {set_clause} WHERE battle_id = ?", values)
         return cursor.rowcount > 0
+
+def delete_battle_record(battle_id: str):
+    """删除指定的对战记录"""
+    with db_access() as conn:
+        cursor = conn.execute("DELETE FROM battles WHERE battle_id = ?", (battle_id,))
+        return cursor.rowcount > 0
+
+def get_pending_battles_before(timestamp: float) -> List[Dict]:
+    """获取在指定时间戳之前创建的、状态为 pending_vote 的对战记录"""
+    with db_access() as conn:
+        cursor = conn.execute(
+            "SELECT * FROM battles WHERE status = 'pending_vote' AND created_at < ?",
+            (timestamp,)
+        )
+        return [dict(row) for row in cursor.fetchall()]
 
 # --- 模型评分管理 ---
 

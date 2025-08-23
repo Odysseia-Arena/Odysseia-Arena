@@ -11,6 +11,7 @@ from . import storage
 from . import battle_controller
 from . import vote_controller
 from . import elo_rating
+from . import battle_cleaner
 from .logger_config import log_event, log_error, logger
 
 # 初始化FastAPI应用
@@ -58,6 +59,9 @@ async def startup_event():
         logger.critical("服务器启动失败：存储初始化错误。")
         # 如果存储初始化失败，服务器不应继续运行
         raise Exception("Server startup failed due to storage initialization error.")
+
+    # 启动后台清理任务
+    battle_cleaner.run_battle_cleaner()
 
 # --- Pydantic模型定义（用于请求体验证和响应结构） ---
 
