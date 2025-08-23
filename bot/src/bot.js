@@ -547,6 +547,133 @@ async function handleCommand(interaction) {
         await interaction.editReply({ content: `获取健康检查失败：${detail}` });
       }
     }
+  } else if (interaction.commandName === 'battleback') {
+    // 频道白名单检查
+    if (!isChannelAllowed(interaction.channelId)) {
+      const tips = ALLOWED_CHANNEL_IDS.size
+        ? `此命令仅限在以下频道使用：${allowedMentionList()}`
+        : '此命令暂不可用。';
+      await interaction.reply({ content: tips, flags: 'Ephemeral' });
+      return;
+    }
+
+    try {
+      await interaction.reply({ content: '正在查找你上一场对战...', flags: 'Ephemeral' });
+
+      const response = await axios.post(`${API_URL}/battleback`, {
+        discord_id: interaction.user.id,
+      });
+      const data = response.data;
+
+      // 情况1: 对战正在生成中
+      if (data.message && data.message.includes('创建对战中')) {
+        await interaction.editReply({ content: data.message });
+        return;
+      }
+
+      // 情况2: 找到了等待投票或已完成的对战
+      if (data.battle_id) {
+        const battle = data;
+        // --- 复用 battle 和 battleinfo 的显示逻辑 ---
+        activeBattles.set(battle.battle_id, {
+          ...battle,
+          authorId: interaction.user.id,
+          createdAt: new Date(),
+        });
+
+        const statusRaw = battle.status || 'pending_vote';
+        const statusDisplay = statusRaw === 'completed' ? '已完成' : '等待投票';
+
+        const embed = new EmbedBuilder()
+          .setColor(statusRaw === 'completed' ? 0x57F287 : 0x0099FF)
+          .setTitle('⚔️ 召回对战成功！')
+          .setFooter({ text: `对战 ID: ${battle.battle_id}\n状态: ${statusDisplay}` });
+
+        const quotedPrompt = battle.prompt.split('\n').map(line => `> ${line}`).join('\n');
+        const baseText = `**提示词:**\n${quotedPrompt}\n\n`;
+        let templateA = `**模型 A 的回答**\n\`\`\`\n%content%\n\`\`\`\n`;
+        let templateB = `**模型 B 的回答**\n\`\`\`\n%content%\n\`\`\``;
+
+        const formattingLength = (baseText + templateA + templateB).replace(/%content%/g, '').length;
+        const availableLength = 4096 - formattingLength;
+        const minQuota = 1000;
+
+        let responseA_display = battle.response_a || 'N/A';
+        let responseB_display = battle.response_b || 'N/A';
+        let truncated = false;
+        let is_A_truncated = false;
+        let is_B_truncated = false;
+
+        if ((responseA_display.length + responseB_display.length) > availableLength) {
+          truncated = true;
+          let remainingLength = availableLength;
+          if (responseA_display.length < minQuota) {
+            remainingLength -= responseA_display.length;
+          } else {
+            const allocatedToA = Math.floor(availableLength / 2);
+            if (responseA_display.length > allocatedToA) {
+              const maxA_Length = allocatedToA > 3 ? allocatedToA - 3 : 0;
+              responseA_display = responseA_display.substring(0, maxA_Length) + '...';
+              is_A_truncated = true;
+            }
+            remainingLength -= responseA_display.length;
+          }
+          if (responseB_display.length > remainingLength) {
+            const maxB_Length = remainingLength > 3 ? remainingLength - 3 : 0;
+            responseB_display = responseB_display.substring(0, maxB_Length) + '...';
+            is_B_truncated = true;
+          }
+        }
+
+        if (is_A_truncated) templateA = `**模型 A 的回答 (部分)**\n\`\`\`\n%content%\n\`\`\`\n`;
+        if (is_B_truncated) templateB = `**模型 B 的回答 (部分)**\n\`\`\`\n%content%\n\`\`\``;
+
+        const finalDescription = baseText +
+                                 templateA.replace('%content%', responseA_display) +
+                                 templateB.replace('%content%', responseB_display);
+        embed.setDescription(finalDescription);
+        
+        const components = [];
+        const viewButtons = new ActionRowBuilder()
+          .addComponents(
+            new ButtonBuilder().setCustomId(`view_full:${battle.battle_id}:model_a`).setLabel('查看模型A全文').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(`view_full:${battle.battle_id}:model_b`).setLabel('查看模型B全文').setStyle(ButtonStyle.Secondary)
+          );
+        components.push(viewButtons);
+
+        if (statusRaw === 'pending_vote') {
+          embed.addFields({ name: '❗ 注意', value: '创建的对战若30分钟内无人投票将被自动销毁。' });
+          const voteButtons = new ActionRowBuilder()
+            .addComponents(
+              new ButtonBuilder().setCustomId(`vote:${battle.battle_id}:model_a`).setLabel('👍 投给模型 A').setStyle(ButtonStyle.Primary),
+              new ButtonBuilder().setCustomId(`vote:${battle.battle_id}:model_b`).setLabel('👍 投给模型 B').setStyle(ButtonStyle.Primary),
+              new ButtonBuilder().setCustomId(`vote:${battle.battle_id}:tie`).setLabel('🤝 平局').setStyle(ButtonStyle.Secondary)
+            );
+          components.push(voteButtons);
+        } else if (statusRaw === 'completed') {
+            let winnerText = 'N/A';
+            if (battle.winner === 'model_a') winnerText = '模型 A';
+            else if (battle.winner === 'model_b') winnerText = '模型 B';
+            else if (battle.winner === 'Tie') winnerText = '平局';
+            else if (battle.winner) winnerText = battle.winner;
+            embed.addFields(
+              { name: '模型 A 名称', value: battle.model_a_name || 'N/A', inline: true },
+              { name: '模型 B 名称', value: battle.model_b_name || 'N/A', inline: true },
+              { name: '获胜者', value: winnerText, inline: false }
+            );
+        }
+
+        await interaction.editReply({ content: `<@${interaction.user.id}>`, embeds: [embed], components: components });
+      } else {
+        // 其他情况，通常是 "未找到记录"
+        const detail = data.detail || '无法召回对战，可能没有正在进行的对战。';
+        await interaction.editReply({ content: detail });
+      }
+    } catch (error) {
+      console.error('召回对战时出错:', error.response ? JSON.stringify(error.response.data, null, 2) : error.message);
+      const detail = error?.response?.data?.detail || '召回对战失败，请稍后再试。';
+      await interaction.editReply({ content: detail });
+    }
   }
 }
 

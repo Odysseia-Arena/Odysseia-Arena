@@ -23,6 +23,7 @@ VOTE_TIME_WINDOW = 30 * 60 # 30分钟内不能重复投票
 BATTLE_CREATION_WINDOW = 60 * 60  # 1小时
 MAX_BATTLES_PER_HOUR = int(os.getenv("MAX_BATTLES_PER_HOUR", 20))
 MIN_BATTLE_INTERVAL = int(os.getenv("MIN_BATTLE_INTERVAL", 30))
+ENABLE_SERIAL_BATTLE_LIMIT = os.getenv("ENABLE_SERIAL_BATTLE_LIMIT", "False").lower() in ('true', '1', 't')
 
 # 对战清理配置 (秒)
 GENERATION_TIMEOUT = 30 * 60      # 30分钟生成超时

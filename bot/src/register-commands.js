@@ -31,6 +31,11 @@ const commands = [
     name: 'health',
     description: '检查后端健康状态',
     dm_permission: false,
+  },
+  {
+    name: 'battleback',
+    description: '召回你上一场未完成或已完成的对战',
+    dm_permission: false,
   }
 ];
 

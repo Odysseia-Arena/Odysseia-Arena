@@ -246,6 +246,25 @@ def get_recent_battles_by_discord_id(discord_id: str, time_window: float) -> Lis
         )
         return [dict(row) for row in cursor.fetchall()]
 
+def has_pending_battle(discord_id: str) -> bool:
+    """检查用户是否有一个正在进行的对战 (状态为 'pending_generation' 或 'pending_vote')"""
+    with db_access() as conn:
+        cursor = conn.execute(
+            "SELECT 1 FROM battles WHERE discord_id = ? AND (status = 'pending_generation' OR status = 'pending_vote') LIMIT 1",
+            (discord_id,)
+        )
+        return cursor.fetchone() is not None
+
+def get_latest_battle_by_discord_id(discord_id: str) -> Optional[Dict]:
+    """获取指定用户最新的一条对战记录"""
+    with db_access() as conn:
+        cursor = conn.execute(
+            "SELECT * FROM battles WHERE discord_id = ? ORDER BY created_at DESC LIMIT 1",
+            (discord_id,)
+        )
+        record = cursor.fetchone()
+        return dict(record) if record else None
+
 # --- 模型评分管理 ---
 
 def get_model_scores() -> Dict[str, Dict]:

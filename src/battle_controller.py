@@ -19,9 +19,15 @@ def _check_rate_limit(discord_id: str):
     if not discord_id:
         return  # 如果没有提供 discord_id，则跳过检查
 
+    # 1. 检查串行限制
+    if config.ENABLE_SERIAL_BATTLE_LIMIT:
+        if storage.has_pending_battle(discord_id):
+            message = "您有一个正在处理的对战，请在其完成后再试。使用 /battleback 查看上条对战信息"
+            raise RateLimitError(message)
+
     # 使用 battle 记录的 created_at 作为计时起点
     
-    # 1. 检查每小时的对战次数
+    # 2. 检查每小时的对战次数
     recent_battles = storage.get_recent_battles_by_discord_id(discord_id, config.BATTLE_CREATION_WINDOW)
     if len(recent_battles) >= config.MAX_BATTLES_PER_HOUR:
         # 计算下一次可用的时间，即最早的那个 battle 的创建时间 + 1小时
@@ -30,7 +36,7 @@ def _check_rate_limit(discord_id: str):
         message = f"您在一小时内创建的对战已达上限 ({config.MAX_BATTLES_PER_HOUR}场)，请稍后再试。"
         raise RateLimitError(message, available_at=available_at)
 
-    # 2. 检查最短对战间隔
+    # 3. 检查最短对战间隔
     if recent_battles:
         last_battle_time = recent_battles[0]['created_at']
         # 计时起点应该是上一个 battle 的创建时间

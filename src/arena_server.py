@@ -73,6 +73,9 @@ class BattleRequest(BaseModel):
     custom_prompt: Optional[str] = None
     discord_id: Optional[str] = None # 添加 discord_id 字段
 
+class BattleBackRequest(BaseModel):
+    discord_id: str
+
 class VoteRequest(BaseModel):
     vote_choice: str # "model_a", "model_b", 或 "tie"
     discord_id: str # Discord用户ID
@@ -112,6 +115,40 @@ async def create_battle(request_body: BattleRequest):
         # 处理未知错误
         logger.exception("创建对战时发生未知错误") # 记录堆栈跟踪
         log_error(f"创建对战时发生未知错误: {e}", {"step": "create_battle_internal"})
+        raise HTTPException(status_code=500, detail="服务器内部错误。")
+
+@app.post("/battleback")
+async def get_battle_back(request_body: BattleBackRequest):
+    """获取用户上一个对战的信息"""
+    logger.info(f"Received request for /battleback from discord_id: {request_body.discord_id}")
+    try:
+        battle = storage.get_latest_battle_by_discord_id(request_body.discord_id)
+        if not battle:
+            raise HTTPException(status_code=404, detail="未找到您的对战记录。")
+
+        status = battle["status"]
+        if status == "completed":
+            # 逻辑复用 get_battle_details
+            return await get_battle_details(battle["battle_id"])
+        elif status == "pending_vote":
+            # 返回匿名化的对战信息以供投票
+            return {
+                "battle_id": battle["battle_id"],
+                "prompt": battle["prompt"],
+                "response_a": battle["response_a"],
+                "response_b": battle["response_b"],
+            }
+        elif status == "pending_generation":
+            return {"message": "创建对战中： 这通常需要一些时间，机器人会在创建成功后通知你。"}
+        
+        # 对于其他可能的状态，返回通用消息
+        raise HTTPException(status_code=404, detail="未找到可供操作的对战。")
+
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.exception("处理 /battleback 请求时发生未知错误")
+        log_error(f"处理 /battleback 时发生未知错误: {e}", {"discord_id": request_body.discord_id})
         raise HTTPException(status_code=500, detail="服务器内部错误。")
 
 @app.post("/vote/{battle_id}")
