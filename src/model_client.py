@@ -70,7 +70,7 @@ def call_model(model: dict, prompt: str) -> str:
                 api_url,
                 headers=headers,
                 json=payload,
-                timeout=60
+                timeout=360
             )
             
             if response.status_code == 200:

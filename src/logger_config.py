@@ -29,7 +29,7 @@ def setup_logger():
 
     # 控制台处理器 (输出到控制台)
     ch = logging.StreamHandler()
-    ch.setLevel(logging.WARNING) # 控制台只输出警告及以上级别的日志，保持简洁
+    ch.setLevel(logging.INFO) # 控制台输出所有级别的日志
 
     # 定义格式化器
     # 使用简单的字符串格式，方便阅读

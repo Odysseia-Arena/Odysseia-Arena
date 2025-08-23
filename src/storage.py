@@ -119,7 +119,8 @@ def initialize_storage():
                 status TEXT NOT NULL, -- pending_vote, completed
                 winner TEXT, -- model_a, model_b, tie
                 timestamp REAL NOT NULL,
-                created_at REAL NOT NULL
+                created_at REAL NOT NULL,
+                discord_id TEXT -- 添加 discord_id 字段
             );
         """)
 
@@ -166,23 +167,25 @@ def initialize_storage():
 def save_battle_record(battle_id: str, record: Dict):
     """保存新的对战记录"""
     # 为了兼容旧代码，将model_a/b重命名为model_a/b_id
-    record['model_a_id'] = record.pop('model_a')
-    record['model_b_id'] = record.pop('model_b')
+    if 'model_a' in record:
+        record['model_a_id'] = record.pop('model_a')
+    if 'model_b' in record:
+        record['model_b_id'] = record.pop('model_b')
 
     with db_access() as conn:
         conn.execute("""
             INSERT INTO battles (
                 battle_id, battle_type, prompt,
                 model_a_id, model_b_id, model_a_name, model_b_name,
-                response_a, response_b, status, winner, timestamp, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                response_a, response_b, status, winner, timestamp, created_at, discord_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            record["battle_id"], record["battle_type"], record["prompt"],
-            record["model_a_id"], record["model_b_id"],
-            record["model_a_name"], record["model_b_name"],
-            record["response_a"], record["response_b"],
+            record["battle_id"], record.get("battle_type"), record.get("prompt"),
+            record.get("model_a_id"), record.get("model_b_id"),
+            record.get("model_a_name"), record.get("model_b_name"),
+            record.get("response_a"), record.get("response_b"),
             record["status"], record.get("winner"), record["timestamp"],
-            record["created_at"]
+            record["created_at"], record.get("discord_id")
         ))
 
 def get_battle_record(battle_id: str) -> Dict | None:
@@ -221,6 +224,25 @@ def get_pending_battles_before(timestamp: float) -> List[Dict]:
         cursor = conn.execute(
             "SELECT * FROM battles WHERE status = 'pending_vote' AND created_at < ?",
             (timestamp,)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+def get_stale_generation_battles(timestamp: float) -> List[Dict]:
+    """获取在指定时间戳之前创建的、状态为 pending_generation 的对战记录"""
+    with db_access() as conn:
+        cursor = conn.execute(
+            "SELECT * FROM battles WHERE status = 'pending_generation' AND created_at < ?",
+            (timestamp,)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+def get_recent_battles_by_discord_id(discord_id: str, time_window: float) -> List[Dict]:
+    """获取指定用户在给定时间窗口内创建的对战记录"""
+    cutoff_time = time.time() - time_window
+    with db_access() as conn:
+        cursor = conn.execute(
+            "SELECT * FROM battles WHERE discord_id = ? AND created_at > ? ORDER BY created_at DESC",
+            (discord_id, cutoff_time)
         )
         return [dict(row) for row in cursor.fetchall()]
 

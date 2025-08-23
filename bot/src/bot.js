@@ -68,9 +68,11 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 async function handleCommand(interaction) {
+  console.log(`[Command] Received command: ${interaction.commandName} from user ${interaction.user.id} in channel ${interaction.channelId}`);
   if (interaction.commandName === 'battle') {
     // 用户/角色白名单检查
     if (!isMemberAllowed(interaction)) {
+      console.log(`[Auth] User ${interaction.user.id} failed member check.`);
       const tips = (ALLOWED_USER_IDS.size || ALLOWED_ROLE_IDS.size)
         ? `此命令仅限以下用户/角色使用：${allowedUserRoleMentions()}`
         : '此命令暂不可用。';
@@ -84,6 +86,7 @@ async function handleCommand(interaction) {
 
     // 频道白名单检查
     if (!isChannelAllowed(interaction.channelId)) {
+      console.log(`[Auth] Channel ${interaction.channelId} failed channel check.`);
       const tips = ALLOWED_CHANNEL_IDS.size
         ? `此命令仅限在以下频道使用：${allowedMentionList()}`
         : '此命令暂不可用。';
@@ -101,10 +104,14 @@ async function handleCommand(interaction) {
         flags: 'Ephemeral'
       });
 
-      const response = await axios.post(`${API_URL}/battle`, {
+      const payload = {
         battle_type: 'fixed',
-      });
+        discord_id: interaction.user.id,
+      };
+      console.log(`[API] Sending POST request to ${API_URL}/battle with payload:`, JSON.stringify(payload, null, 2));
+      const response = await axios.post(`${API_URL}/battle`, payload);
       const battle = response.data;
+      console.log(`[API] Successfully created battle ${battle.battle_id} for user ${interaction.user.id}`);
       
       // 存储完整对战信息用于后续交互
       activeBattles.set(battle.battle_id, {
@@ -237,12 +244,36 @@ async function handleCommand(interaction) {
       // await interaction.deleteReply();
 
     } catch (error) {
-      console.error('创建对战时出错:', error);
-      if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({ content: '创建对战失败，请稍后再试。', flags: 'Ephemeral' });
-      } else {
-        await interaction.editReply({ content: '创建对战失败，请稍后再试。' });
+      console.error('创建对战时出错:', error.response ? JSON.stringify(error.response.data, null, 2) : error.message);
+      
+      // 检查是否是速率限制错误
+      if (error.response && error.response.status === 429 && typeof error.response.data.detail === 'object') {
+        const detail = error.response.data.detail;
+        let message = detail.message; // 优先使用API提供的消息
+
+        if (!message) {
+            const availableAt = detail.available_at;
+            const now = Date.now() / 1000;
+            const waitSeconds = availableAt ? Math.ceil(availableAt - now) : 0;
+            if (waitSeconds > 0) {
+                message = `创建对战过于频繁，请在 ${waitSeconds} 秒后重试。`;
+            } else {
+                message = '创建对战过于频繁，请稍后重试。';
+            }
+        }
+        
+        // 将两条消息合并为一条，直接编辑原始消息
+        await interaction.editReply({ content: message, components: [] });
+        return;
       }
+
+      // 处理其他类型的错误
+      const detail = error?.response?.data?.detail || error?.response?.data?.message || error?.message || '未知错误';
+      // 移除拼接的句号，让后端决定是否包含标点
+      const errorMessage = `创建对战失败：${String(detail)}。请稍后再试。`.replace('。。', '。');
+
+      // 编辑初始的 "创建中..." 消息来显示错误
+      await interaction.editReply({ content: errorMessage, components: [] });
     }
   } else if (interaction.commandName === 'leaderboard') {
     // 频道白名单检查
@@ -260,7 +291,9 @@ async function handleCommand(interaction) {
     try {
         // 需求变更：所有命令响应仅发起人可见
         await interaction.deferReply({ flags: 'Ephemeral' });
-        const response = await axios.get(`${API_URL}/leaderboard`);
+        const url = `${API_URL}/leaderboard`;
+        console.log(`[API] Sending GET request to ${url}`);
+        const response = await axios.get(url);
         const { leaderboard } = response.data;
 
         if (!leaderboard || leaderboard.length === 0) {
@@ -313,7 +346,9 @@ async function handleCommand(interaction) {
       await interaction.deferReply({ flags: 'Ephemeral' });
       const battleId = interaction.options.getString('battle_id', true);
 
-      const response = await axios.get(`${API_URL}/battle/${battleId}`);
+      const url = `${API_URL}/battle/${battleId}`;
+      console.log(`[API] Sending GET request to ${url}`);
+      const response = await axios.get(url);
       const data = response.data;
 
       const statusRaw = data.status;
@@ -425,7 +460,7 @@ async function handleCommand(interaction) {
           winnerText = '模型 A';
         } else if (data.winner === 'model_b') {
           winnerText = '模型 B';
-        } else if (data.winner === 'tie') {
+        } else if (data.winner === 'Tie') {
           winnerText = '平局';
         } else if (data.winner) {
           winnerText = data.winner;
@@ -471,7 +506,9 @@ async function handleCommand(interaction) {
     try {
       // 需求变更：所有命令响应仅发起人可见
       await interaction.deferReply({ flags: 'Ephemeral' });
-      const response = await axios.get(`${API_URL}/health`);
+      const url = `${API_URL}/health`;
+      console.log(`[API] Sending GET request to ${url}`);
+      const response = await axios.get(url);
       const data = response.data;
 
       const ok = data.status === 'ok';
@@ -618,7 +655,7 @@ async function handleVoteButton(interaction, battleId, choice) {
         winnerText = '模型 A';
       } else if (voteResult.winner === 'model_b') {
         winnerText = '模型 B';
-      } else if (voteResult.winner === 'tie') {
+      } else if (voteResult.winner === 'Tie') {
         winnerText = '平局';
       } else if (voteResult.winner) {
         winnerText = voteResult.winner;

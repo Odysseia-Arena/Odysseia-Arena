@@ -1,6 +1,9 @@
 # config.py
 import json
 import os
+from dotenv import load_dotenv
+
+load_dotenv() # 加载 .env 文件
 
 # 定义配置文件的路径
 CONFIG_DIR = "config"
@@ -15,8 +18,14 @@ K_FACTOR = 32
 
 # 投票配置 (秒)
 VOTE_TIME_WINDOW = 30 * 60 # 30分钟内不能重复投票
-USER_RATE_LIMIT_WINDOW = 60 * 60 # 1小时
-USER_MAX_VOTES_PER_HOUR = 100 # 每个用户每小时最大投票数（设高一点以方便测试）
+
+# 对战创建速率限制 (秒)
+BATTLE_CREATION_WINDOW = 60 * 60  # 1小时
+MAX_BATTLES_PER_HOUR = int(os.getenv("MAX_BATTLES_PER_HOUR", 20))
+MIN_BATTLE_INTERVAL = int(os.getenv("MIN_BATTLE_INTERVAL", 30))
+
+# 对战清理配置 (秒)
+GENERATION_TIMEOUT = 30 * 60      # 30分钟生成超时
 
 
 def load_models():

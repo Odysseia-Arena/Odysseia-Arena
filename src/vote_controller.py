@@ -27,25 +27,11 @@ def _check_anti_cheat(battle_id: str, user_hash: str) -> str | None:
     # 只加载最近需要的投票记录
     voting_history = storage.get_recent_votes(max_window)
 
-    user_votes_in_window = 0
-
     # 遍历历史记录（数据库已按时间倒序返回且已过滤时间）
-    for vote in voting_history: 
-        # 1. 重复投票检测
+    for vote in voting_history:
+        # 1. 重复投票检测 (移除时间窗口限制)
         if vote["battle_id"] == battle_id and vote["user_hash"] == user_hash:
-            # 仍需检查具体的 VOTE_TIME_WINDOW 要求
-            if current_time - vote["timestamp"] < config.VOTE_TIME_WINDOW:
-                return f"您在{config.VOTE_TIME_WINDOW//60}分钟内已为此对战投过票。"
-
-        # 2. 用户速率限制计数
-        if vote["user_hash"] == user_hash:
-             # 仍需检查具体的 USER_RATE_LIMIT_WINDOW 要求
-             if current_time - vote["timestamp"] < config.USER_RATE_LIMIT_WINDOW:
-                user_votes_in_window += 1
-
-    # 2. 用户速率限制检查
-    if user_votes_in_window >= config.USER_MAX_VOTES_PER_HOUR:
-        return "投票过于频繁，请稍后再试。"
+            return "您已经为这场对战投过票了。"
         
     return None
 

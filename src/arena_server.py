@@ -11,6 +11,7 @@ from . import storage
 from . import battle_controller
 from . import vote_controller
 from . import elo_rating
+from .battle_controller import RateLimitError
 from . import battle_cleaner
 from .logger_config import log_event, log_error, logger
 
@@ -67,9 +68,10 @@ async def startup_event():
 
 class BattleRequest(BaseModel):
     # 默认为第一阶段的固定提示词对战
-    battle_type: str = "fixed" 
+    battle_type: str = "fixed"
     # 第二阶段的自定义提示词（可选，功能已实现但暂时隐藏）
     custom_prompt: Optional[str] = None
+    discord_id: Optional[str] = None # 添加 discord_id 字段
 
 class VoteRequest(BaseModel):
     vote_choice: str # "model_a", "model_b", 或 "tie"
@@ -80,16 +82,25 @@ class VoteRequest(BaseModel):
 @app.post("/battle", status_code=status.HTTP_201_CREATED)
 async def create_battle(request_body: BattleRequest):
     """创建新的对战"""
+    logger.info(f"Received request for /battle from discord_id: {request_body.discord_id}")
     try:
         # 第一阶段限制：只支持 fixed
         # 实时对战逻辑现在由 battle_controller 处理
         # battle_type 和 custom_prompt 的验证也移到 controller 中
         battle_details = await battle_controller.create_battle(
             battle_type=request_body.battle_type,
-            custom_prompt=request_body.custom_prompt
+            custom_prompt=request_body.custom_prompt,
+            discord_id=request_body.discord_id
         )
         log_event("BATTLE_CREATED", {"battle_id": battle_details["battle_id"], "type": request_body.battle_type})
         return battle_details
+    except RateLimitError as e:
+        # 捕获速率限制错误
+        log_event("RATE_LIMIT_EXCEEDED", {"discord_id": request_body.discord_id, "error": str(e)})
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail={"message": str(e), "available_at": e.available_at}
+        )
     except ValueError as e:
         # 处理参数验证错误（例如模型数量不足）
         log_error(str(e), {"step": "create_battle_validation", "request": request_body.dict()})
@@ -144,6 +155,7 @@ async def submit_vote(battle_id: str, vote_request: VoteRequest):
 @app.get("/leaderboard")
 async def get_leaderboard():
     """获取排行榜"""
+    logger.info("Received request for /leaderboard")
     try:
         start_time = time.time()
         # 这一步会自动处理缓存逻辑
@@ -160,6 +172,7 @@ async def get_leaderboard():
 @app.get("/battle/{battle_id}")
 async def get_battle_details(battle_id: str):
     """获取指定对战的详情"""
+    logger.info(f"Received request for /battle/{battle_id}")
     battle = storage.get_battle_record(battle_id)
     if not battle:
         raise HTTPException(status_code=404, detail="对战ID不存在。")
@@ -186,4 +199,5 @@ async def get_battle_details(battle_id: str):
 # 健康检查端点
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "models_count": len(config.AVAILABLE_MODELS), "fixed_prompts_count": len(config.FIXED_PROMPTS)}
+    logger.info("Received request for /health")
+    return {"status": "ok", "models_count": len(config.AVAILABLE_MODELS), "fixed_prompts_count": len(config.load_fixed_prompts())}
