@@ -19,20 +19,13 @@ def _hash_user_id(user_id: str) -> str:
 
 def _check_anti_cheat(battle_id: str, user_hash: str) -> str | None:
     """执行防作弊检查"""
-    current_time = time.time()
+    # 只需要检查重复投票，所以时间窗口就是投票窗口
+    voting_history = storage.get_recent_votes(config.VOTE_TIME_WINDOW)
 
-    # 使用优化后的查询
-    # 计算需要查询的最长时间窗口
-    max_window = max(config.VOTE_TIME_WINDOW, config.USER_RATE_LIMIT_WINDOW)
-    # 只加载最近需要的投票记录
-    voting_history = storage.get_recent_votes(max_window)
-
-    # 遍历历史记录（数据库已按时间倒序返回且已过滤时间）
     for vote in voting_history:
-        # 1. 重复投票检测 (移除时间窗口限制)
         if vote["battle_id"] == battle_id and vote["user_hash"] == user_hash:
             return "您已经为这场对战投过票了。"
-        
+            
     return None
 
 def submit_vote(battle_id: str, vote_choice: str, discord_id: str) -> Dict:
