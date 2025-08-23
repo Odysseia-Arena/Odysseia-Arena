@@ -249,21 +249,36 @@ async function handleCommand(interaction) {
       // 检查是否是速率限制错误
       if (error.response && error.response.status === 429 && typeof error.response.data.detail === 'object') {
         const detail = error.response.data.detail;
-        let message = detail.message; // 优先使用API提供的消息
+        let baseMessage = detail.message; // 优先使用API提供的消息
+        const availableAt = detail.available_at;
+        const now = Date.now() / 1000;
+        const waitSeconds = availableAt ? Math.ceil(availableAt - now) : 0;
 
-        if (!message) {
-            const availableAt = detail.available_at;
-            const now = Date.now() / 1000;
-            const waitSeconds = availableAt ? Math.ceil(availableAt - now) : 0;
-            if (waitSeconds > 0) {
-                message = `创建对战过于频繁，请在 ${waitSeconds} 秒后重试。`;
+        // 如果没有基础消息，则根据等待时间生成一个
+        if (!baseMessage) {
+            baseMessage = '创建对战过于频繁，请稍后重试。';
+        }
+
+        let finalMessage = baseMessage;
+        
+        // 如果有可用的等待时间，附加到消息后面
+        if (waitSeconds > 0) {
+            // 如果基础消息已经包含 "请稍后再试"，则替换它
+            if (finalMessage.includes('，请稍后再试')) {
+                finalMessage = finalMessage.replace('，请稍后再试', '');
+            }
+            
+            // 根据时长选择合适的单位
+            if (waitSeconds > 60) {
+                const waitMinutes = Math.ceil(waitSeconds / 60);
+                finalMessage += `，请在约 ${waitMinutes} 分钟后重试。`;
             } else {
-                message = '创建对战过于频繁，请稍后重试。';
+                finalMessage += `，请在 ${waitSeconds} 秒后重试。`;
             }
         }
-        
+
         // 将两条消息合并为一条，直接编辑原始消息
-        await interaction.editReply({ content: message, components: [] });
+        await interaction.editReply({ content: finalMessage, components: [] });
         return;
       }
 
