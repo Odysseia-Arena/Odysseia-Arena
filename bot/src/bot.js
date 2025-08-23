@@ -657,8 +657,8 @@ async function handleCommand(interaction) {
             else if (battle.winner === 'Tie') winnerText = '平局';
             else if (battle.winner) winnerText = battle.winner;
             embed.addFields(
-              { name: '模型 A 名称', value: battle.model_a_name || 'N/A', inline: true },
-              { name: '模型 B 名称', value: battle.model_b_name || 'N/A', inline: true },
+              { name: '模型 A 名称', value: battle.model_a || 'N/A', inline: true },
+              { name: '模型 B 名称', value: battle.model_b || 'N/A', inline: true },
               { name: '获胜者', value: winnerText, inline: false }
             );
         }
