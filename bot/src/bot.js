@@ -632,16 +632,8 @@ async function handleVoteButton(interaction, battleId, choice) {
   }
   
   const battleInfo = activeBattles.get(battleId);
-  if (!battleInfo) {
-    // 尝试编辑原始消息，如果失败也没关系
-    try {
-      await interaction.editReply({ content: '投票失败：找不到这场对战的信息，它可能已经过期或已完成。', components: [] });
-    } catch(e) {}
-    return;
-  }
-
-  // 检查点击者是否为发起者
-  if (interaction.user.id !== battleInfo.authorId) {
+  // 优化：即使缓存不存在，也应该继续尝试API调用。但如果缓存存在，我们可以预先检查发起者。
+  if (battleInfo && interaction.user.id !== battleInfo.authorId) {
     // 这里不能编辑消息，因为交互不属于该用户。所以我们什么都不做，或者可以发一条新的ephemeral消息
     await interaction.followUp({ content: '抱歉，只有发起这场对战的用户才能投票。', flags: 'Ephemeral' });
     return;
@@ -711,20 +703,30 @@ async function handleVoteButton(interaction, battleId, choice) {
     }
 
   } catch (error) {
-    const status = error?.response?.status;
-    const detail = error?.response?.data?.detail || error?.response?.data?.message || error?.message || '未知错误';
+    // 增加详细日志
+    console.error('投票时出错:', error.response ? JSON.stringify(error.response.data, null, 2) : error.message);
+    
+    // 如果 error.response 不存在，通常是网络问题（例如后端服务未启动）
+    if (!error.response) {
+      await interaction.followUp({
+        content: '投票服务当前不可用，请稍后再试或联系管理员。',
+        flags: 'Ephemeral'
+      });
+      return;
+    }
 
-    if (status === 404 && detail.includes('超时被自动销毁')) {
+    const status = error.response.status;
+    const detail = error.response.data?.detail || error.response.data?.message || '未知错误';
+
+    if (status === 404 && String(detail).includes('超时被自动销毁')) {
       // 对战已超时，发送一个临时的 follow-up 消息
       await interaction.followUp({
         content: '这个对决已经超时（超过30分钟未投票），被自动关闭了。',
         flags: 'Ephemeral'
       });
-      // 也可以选择编辑原消息，但 followUp 更符合“新弹出”的需求
-      // await interaction.editReply({ content: '投票失败：这个对决已超时关闭。', components: [] });
     } else {
-      // 其他错误，编辑原消息
-      await interaction.editReply({ content: `投票失败：${String(detail)}` });
+      // 其他API错误，使用 followUp 发送临时消息，避免修改原始投票界面
+      await interaction.followUp({ content: `投票失败：${String(detail)}`, flags: 'Ephemeral' });
     }
   }
 }

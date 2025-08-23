@@ -194,6 +194,9 @@ async def get_battle_details(battle_id: str):
     battle.pop("model_a_id", None)
     battle.pop("model_b_id", None)
     
+    if battle.get("winner") == "tie":
+        battle["winner"] = "Tie"
+        
     return battle
 
 # 健康检查端点
