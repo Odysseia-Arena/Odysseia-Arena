@@ -142,3 +142,28 @@ async def create_battle(battle_type: str, custom_prompt: str = None, discord_id:
         # 如果在生成过程中发生错误，删除占位记录
         storage.delete_battle_record(battle_id)
         raise e
+
+def unstuck_battle(discord_id: str) -> bool:
+    """
+    处理用户的“脱离卡死”请求。
+    查找用户最新的非完成状态的对战并删除它。
+    """
+    if not discord_id:
+        return False
+
+    latest_battle = storage.get_latest_battle_by_discord_id(discord_id)
+
+    if latest_battle and latest_battle["status"] != "completed":
+        battle_id = latest_battle["battle_id"]
+        
+        # 核心逻辑：直接删除记录。
+        # 如果对战处于 pending_generation，这会使其“孤立”，AI的响应将无处可去。
+        # 如果对战处于 pending_vote，它将从投票池中消失。
+        # 这是一个简单而有效的“终止”方式。
+        was_deleted = storage.delete_battle_record(battle_id)
+        
+        # 注意：不在这里处理排行榜回滚，因为这些未完成的对战从未影响过排行榜分数。
+        
+        return was_deleted
+    
+    return False

@@ -76,6 +76,9 @@ class BattleRequest(BaseModel):
 class BattleBackRequest(BaseModel):
     discord_id: str
 
+class UnstuckRequest(BaseModel):
+    discord_id: str
+
 class VoteRequest(BaseModel):
     vote_choice: str # "model_a", "model_b", 或 "tie"
     discord_id: str # Discord用户ID
@@ -149,6 +152,23 @@ async def get_battle_back(request_body: BattleBackRequest):
     except Exception as e:
         logger.exception("处理 /battleback 请求时发生未知错误")
         log_error(f"处理 /battleback 时发生未知错误: {e}", {"discord_id": request_body.discord_id})
+        raise HTTPException(status_code=500, detail="服务器内部错误。")
+
+@app.post("/battleunstuck")
+async def unstuck_battle_endpoint(request_body: UnstuckRequest):
+    """处理用户的“脱离卡死”请求"""
+    logger.info(f"Received request for /battleunstuck from discord_id: {request_body.discord_id}")
+    try:
+        was_stuck = battle_controller.unstuck_battle(request_body.discord_id)
+        if was_stuck:
+            log_event("BATTLE_UNSTUCK", {"discord_id": request_body.discord_id})
+            return {"message": "您卡住的对战已被清除，现在可以重新开始了。"}
+        else:
+            log_event("BATTLE_UNSTUCK_NOT_FOUND", {"discord_id": request_body.discord_id})
+            return {"message": "没有找到需要清除的对战。"}
+    except Exception as e:
+        logger.exception("处理 /battleunstuck 请求时发生未知错误")
+        log_error(f"处理 /battleunstuck 时发生未知错误: {e}", {"discord_id": request_body.discord_id})
         raise HTTPException(status_code=500, detail="服务器内部错误。")
 
 @app.post("/vote/{battle_id}")

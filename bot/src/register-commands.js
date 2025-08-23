@@ -34,7 +34,12 @@ const commands = [
   },
   {
     name: 'battleback',
-    description: '召回你上一场未完成或已完成的对战',
+    description: '召回你上一场未完成或已完成的_对战',
+    dm_permission: false,
+  },
+  {
+    name: 'battleunstuck',
+    description: '清除卡住的对战，解决无法开始新对战的问题',
     dm_permission: false,
   }
 ];

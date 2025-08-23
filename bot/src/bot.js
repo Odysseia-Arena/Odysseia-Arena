@@ -674,6 +674,30 @@ async function handleCommand(interaction) {
       const detail = error?.response?.data?.detail || '召回对战失败，请稍后再试。';
       await interaction.editReply({ content: detail });
     }
+  } else if (interaction.commandName === 'battleunstuck') {
+    if (!isChannelAllowed(interaction.channelId)) {
+      const tips = ALLOWED_CHANNEL_IDS.size
+        ? `此命令仅限在以下频道使用：${allowedMentionList()}`
+        : '此命令暂不可用。';
+      await interaction.reply({ content: tips, flags: 'Ephemeral' });
+      return;
+    }
+
+    try {
+      await interaction.reply({ content: '正在尝试清除卡住的对战...', flags: 'Ephemeral' });
+
+      const response = await axios.post(`${API_URL}/battleunstuck`, {
+        discord_id: interaction.user.id,
+      });
+
+      const message = response.data.message || '操作已完成，但未收到明确消息。';
+      await interaction.editReply({ content: message });
+
+    } catch (error) {
+      console.error('清除卡住的对战时出错:', error.response ? JSON.stringify(error.response.data, null, 2) : error.message);
+      const detail = error?.response?.data?.detail || '操作失败，请稍后再试。';
+      await interaction.editReply({ content: detail });
+    }
   }
 }
 
