@@ -10,8 +10,8 @@ from dotenv import load_dotenv
 # 在模块加载时执行一次，确保.env文件被找到
 load_dotenv()
 
-MAX_RETRIES = 2  # 最大重试次数（包括首次请求）
-RETRY_DELAY = 1  # 重试间隔（秒）
+MAX_RETRIES = 5  # 最大重试次数（包括首次请求）
+RETRY_DELAY = 2  # 重试间隔（秒）
 
 def _call_openai_format(model: dict, prompt: str, api_key: str, api_url: str) -> str:
     """使用OpenAI格式调用模型"""
@@ -113,12 +113,19 @@ def call_model(model: dict, prompt: str) -> str:
         except ValueError:
             raise
         except Exception as e:
-            last_error = f"API调用错误 (model: {model_id}): {str(e)}"
-        
-        print(f"警告: {last_error} (尝试 {attempt + 1}/{MAX_RETRIES})")
+            error_str = str(e)
+            last_error = f"API调用错误 (model: {model_id}): {error_str}"
+            # 如果是 429 错误，我们明确地继续重试，而不是立即抛出
+            if "429" in error_str:
+                print(f"警告: 遇到API速率限制 (429)。将在 {RETRY_DELAY} 秒后重试... (尝试 {attempt + 1}/{MAX_RETRIES})")
+            else:
+                # 对于其他未知错误，可以选择立即失败或继续重试
+                print(f"警告: {last_error} (尝试 {attempt + 1}/{MAX_RETRIES})")
+
         if attempt < MAX_RETRIES - 1:
             time.sleep(RETRY_DELAY)
         else:
+            # 在所有重试次数用尽后，如果仍然存在错误，则抛出最后的那个错误
             raise Exception(last_error)
             
     raise Exception(f"意外错误: 重试逻辑失败 (model: {model_id})")

@@ -76,7 +76,7 @@ def select_random_models(available_models: list) -> Tuple[dict, dict]:
         if chosen_models[0]['id'] != chosen_models[1]['id']:
             return chosen_models[0], chosen_models[1]
 
-async def create_battle(battle_type: str, custom_prompt: str = None, discord_id: str = None) -> Dict:
+async def create_battle(battle_type: str, custom_prompt: str = None, discord_id: str = None, max_retries: int = 3) -> Dict:
     """
     创建一场新的对战。
 
@@ -149,7 +149,14 @@ async def create_battle(battle_type: str, custom_prompt: str = None, discord_id:
     except Exception as e:
         # 如果在生成过程中发生错误，删除占位记录
         storage.delete_battle_record(battle_id)
-        raise e
+        
+        if max_retries > 0:
+            print(f"创建对战失败，将重试... ({max_retries} 次剩余)")
+            await asyncio.sleep(1)  # 短暂延迟后重试
+            return await create_battle(battle_type, custom_prompt, discord_id, max_retries - 1)
+        else:
+            print("创建对战失败，已达到最大重试次数。")
+            raise e
 
 def unstuck_battle(discord_id: str) -> bool:
     """
