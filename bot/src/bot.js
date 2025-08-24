@@ -533,7 +533,9 @@ async function handleCommand(interaction) {
         .addFields(
           { name: '状态', value: String(data.status || 'unknown'), inline: true },
           { name: '模型数量', value: String(data.models_count ?? 'N/A'), inline: true },
-          { name: '固定提示词数量', value: String(data.fixed_prompts_count ?? 'N/A'), inline: true }
+          { name: '固定提示词数量', value: String(data.fixed_prompts_count ?? 'N/A'), inline: true },
+          { name: '已记录用户数', value: String(data.recorded_users_count ?? 'N/A'), inline: true },
+          { name: '已完成的对战数', value: String(data.completed_battles_count ?? 'N/A'), inline: true }
         )
         .setTimestamp();
 

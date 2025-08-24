@@ -18,15 +18,15 @@ def load_test_responses() -> Dict[str, Dict[str, str]]:
         # 提供一个最小的测试数据
         return {
             "写一首春天的诗": {
-                model: f"[测试响应] 春天来了，{model}模型的测试诗句。"
-                for model in config.AVAILABLE_MODELS
+                model["id"]: f"[测试响应] 春天来了，{model['name']}模型的测试诗句。"
+                for model in config.get_models()
             }
         }
 
 def generate_responses_with_api() -> Dict[str, Dict[str, str]]:
     """使用真实API生成所有固定提示词的响应"""
-    prompts = config.FIXED_PROMPTS
-    models = config.AVAILABLE_MODELS
+    prompts = config.load_fixed_prompts()
+    models = config.get_models()
     
     if not prompts:
         raise ValueError("没有找到固定提示词")

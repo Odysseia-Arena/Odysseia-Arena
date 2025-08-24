@@ -84,6 +84,10 @@ def generate_leaderboard() -> List[Dict]:
     leaderboard = []
 
     for model_id, stats in scores.items():
+        # 跳过is_active为False(0)的模型
+        if not stats.get("is_active", 1):
+            continue
+
         # 直接从数据库记录中获取模型名称
         display_name = stats.get("model_name", model_id)
         rating = stats["rating"]

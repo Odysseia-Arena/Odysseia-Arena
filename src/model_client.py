@@ -43,8 +43,9 @@ def _call_anthropic_format(model: dict, prompt: str, api_key: str, api_url: str)
     }
     payload = {
         "model": model['id'],
-        "max_tokens": 1024,
-        "messages": [{"role": "user", "content": prompt}]
+        "max_tokens": 32000,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 1.0
     }
     
     # 如果用户没有在config/models.json中提供api_url，则使用默认值

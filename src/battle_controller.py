@@ -47,12 +47,20 @@ def _check_rate_limit(discord_id: str):
             raise RateLimitError(message, available_at=available_at)
 
 def select_random_models(available_models: list) -> Tuple[dict, dict]:
-    """根据权重随机选择两个不同的模型对象进行对战"""
-    if len(available_models) < 2:
-        raise ValueError("可用模型少于两个，无法开始对战。")
+    """根据权重随机选择两个不同的、处于活动状态的模型对象进行对战"""
+    # 首先，从所有可用模型中筛选出活动模型
+    # 我们从数据库获取完整的模型信息，包括 is_active 状态
+    all_scores = storage.get_model_scores()
+    active_model_ids = {model_id for model_id, stats in all_scores.items() if stats.get("is_active", 1)}
+    
+    # 根据活动模型ID列表来过滤从 config.get_models() 加载的模型列表
+    active_models_config = [m for m in available_models if m['id'] in active_model_ids]
+
+    if len(active_models_config) < 2:
+        raise ValueError("活动模型少于两个，无法开始对战。")
 
     # 提取模型和对应的权重，如果模型没有权重，则默认为1.0
-    models = available_models
+    models = active_models_config
     weights = [model.get("weight", 1.0) for model in models]
     
     # 检查权重是否都为非正数，如果是，则无法进行加权抽样
@@ -93,8 +101,8 @@ async def create_battle(battle_type: str, custom_prompt: str = None, discord_id:
     else:
         raise ValueError(f"无效的对战类型: {battle_type}")
 
-    # 2. 选择模型对象
-    model_a, model_b = select_random_models(config.AVAILABLE_MODELS)
+    # 2. 选择模型对象 (select_random_models 内部会处理活动模型的过滤)
+    model_a, model_b = select_random_models(config.get_models())
 
     # 3. 立即创建占位记录以锁定速率
     battle_id = str(uuid.uuid4())

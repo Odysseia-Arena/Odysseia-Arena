@@ -6,7 +6,9 @@ import threading
 import time
 from typing import Dict, List, Any, Optional
 from contextlib import contextmanager
+from typing import Optional
 from . import config
+from .logger_config import logger
 
 # 定义数据存储路径
 DATABASE_FILE = os.path.join(config.DATA_DIR, "arena.db")
@@ -100,7 +102,8 @@ def initialize_storage():
                 rating INTEGER NOT NULL,
                 battles INTEGER DEFAULT 0 NOT NULL,
                 wins INTEGER DEFAULT 0 NOT NULL,
-                ties INTEGER DEFAULT 0 NOT NULL
+                ties INTEGER DEFAULT 0 NOT NULL,
+                is_active BOOLEAN DEFAULT 1 NOT NULL
             );
         """)
 
@@ -140,26 +143,53 @@ def initialize_storage():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_voting_history_user_hash ON voting_history (user_hash);")
 
         # --- 模型数据同步 ---
-        # 1. 插入新模型
+        sync_models_with_db(conn)
+
+def sync_models_with_db(conn: Optional[sqlite3.Connection] = None):
+    """
+    将配置文件中的模型列表与数据库同步。
+    - 插入新模型。
+    - 更新现有模型的名称。
+    """
+    def _sync_logic(db_conn):
+        cursor = db_conn.cursor()
+        
+        # 1. 从数据库中获取现有模型列表
         cursor.execute("SELECT model_id FROM models")
         existing_model_ids = {row["model_id"] for row in cursor.fetchall()}
         
-        models_to_insert = []
-        for model_obj in config.AVAILABLE_MODELS:
-            model_id = model_obj['id']
-            if model_id not in existing_model_ids:
-                models_to_insert.append((model_id, model_obj['name'], config.DEFAULT_ELO_RATING))
+        # 2. 从配置中获取当前模型列表
+        current_models = config.get_models()
+        current_model_ids = {model['id'] for model in current_models}
         
-        if models_to_insert:
-            cursor.executemany("INSERT INTO models (model_id, model_name, rating) VALUES (?, ?, ?)", models_to_insert)
+        # 3. 插入新模型
+        new_model_ids = current_model_ids - existing_model_ids
+        if new_model_ids:
+            models_to_insert = []
+            for model_obj in current_models:
+                if model_obj['id'] in new_model_ids:
+                    models_to_insert.append((model_obj['id'], model_obj['name'], config.DEFAULT_ELO_RATING))
+            
+            if models_to_insert:
+                cursor.executemany("INSERT INTO models (model_id, model_name, rating) VALUES (?, ?, ?)", models_to_insert)
+                logger.info(f"数据库同步：新增了 {len(models_to_insert)} 个模型: {[m[0] for m in models_to_insert]}")
 
-        # 2. 更新现有模型的名称 (实现名称热更新)
+        # 4. 更新现有模型的名称 (实现名称热更新)
         models_to_update = []
-        for model_obj in config.AVAILABLE_MODELS:
-            models_to_update.append((model_obj['name'], model_obj['id']))
+        for model_obj in current_models:
+            if model_obj['id'] in existing_model_ids:
+                models_to_update.append((model_obj['name'], model_obj['id']))
         
         if models_to_update:
             cursor.executemany("UPDATE models SET model_name = ? WHERE model_id = ?", models_to_update)
+
+    if conn:
+        # 如果提供了现有连接（例如在事务中），则直接使用它
+        _sync_logic(conn)
+    else:
+        # 否则，创建一个新的连接上下文
+        with db_access() as new_conn:
+            _sync_logic(new_conn)
 
 # --- 对战记录管理 ---
 # (所有这些函数现在都使用 db_access()，因此它们会自动参与活动事务或自动提交)
@@ -267,6 +297,15 @@ def get_latest_battle_by_discord_id(discord_id: str) -> Optional[Dict]:
 
 # --- 模型评分管理 ---
 
+def set_model_active_status(model_id: str, is_active: bool) -> bool:
+    """设置模型的活动状态"""
+    with db_access() as conn:
+        cursor = conn.execute(
+            "UPDATE models SET is_active = ? WHERE model_id = ?",
+            (1 if is_active else 0, model_id)
+        )
+        return cursor.rowcount > 0
+
 def get_model_scores() -> Dict[str, Dict]:
     """获取所有模型的评分"""
     scores = {}
@@ -345,3 +384,20 @@ def get_fixed_prompt_responses() -> Dict[str, Dict[str, str]]:
 
 # --- 排行榜缓存管理 (已弃用) ---
 # 注意：排行榜现在直接从数据库读取，不再使用缓存机制
+
+# --- 统计信息 ---
+
+def get_total_users_count() -> int:
+    """获取已记录的唯一用户总数"""
+    with db_access() as conn:
+        # discord_id 可能为空，所以我们需要筛选非空值
+        cursor = conn.execute("SELECT COUNT(DISTINCT discord_id) FROM battles WHERE discord_id IS NOT NULL")
+        count = cursor.fetchone()[0]
+        return count if count is not None else 0
+
+def get_completed_battles_count() -> int:
+    """获取已完成的对战总数"""
+    with db_access() as conn:
+        cursor = conn.execute("SELECT COUNT(*) FROM battles WHERE status = 'completed'")
+        count = cursor.fetchone()[0]
+        return count if count is not None else 0

@@ -14,6 +14,7 @@ from . import elo_rating
 from .battle_controller import RateLimitError
 from . import battle_cleaner
 from .logger_config import log_event, log_error, logger
+from . import file_watcher
 
 # 初始化FastAPI应用
 app = FastAPI(title="创意写作大模型竞技场后端", version="1.0.0")
@@ -49,12 +50,13 @@ async def startup_event():
         
         # 在启动时加载一次以获取数量
         prompts_count = len(config.load_fixed_prompts())
+        models_count = len(config.get_models())
         log_event("SERVER_STARTUP", {
             "status": "success",
-            "models_loaded": len(config.AVAILABLE_MODELS),
+            "models_loaded": models_count,
             "fixed_prompts_loaded": prompts_count
         })
-        logger.info(f"服务器启动成功！已加载 {len(config.AVAILABLE_MODELS)} 个模型，{prompts_count} 个固定提示词。")
+        logger.info(f"服务器启动成功！已加载 {models_count} 个模型，{prompts_count} 个固定提示词。")
     except Exception as e:
         log_error(f"存储初始化失败: {e}", {"step": "initialize_storage"})
         logger.critical("服务器启动失败：存储初始化错误。")
@@ -63,6 +65,9 @@ async def startup_event():
 
     # 启动后台清理任务
     battle_cleaner.run_battle_cleaner()
+    
+    # 启动配置文件热更新监控
+    file_watcher.start_file_watcher()
 
 # --- Pydantic模型定义（用于请求体验证和响应结构） ---
 
@@ -260,4 +265,17 @@ async def get_battle_details(battle_id: str):
 @app.get("/health")
 async def health_check():
     logger.info("Received request for /health")
-    return {"status": "ok", "models_count": len(config.AVAILABLE_MODELS), "fixed_prompts_count": len(config.load_fixed_prompts())}
+    try:
+        total_users = storage.get_total_users_count()
+        completed_battles = storage.get_completed_battles_count()
+        
+        return {
+            "status": "ok",
+            "models_count": len(config.get_models()),
+            "fixed_prompts_count": len(config.load_fixed_prompts()),
+            "recorded_users_count": total_users,
+            "completed_battles_count": completed_battles
+        }
+    except Exception as e:
+        logger.exception("健康检查时发生数据库错误")
+        raise HTTPException(status_code=503, detail=f"数据库服务不可用: {e}")
