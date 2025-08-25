@@ -6,3 +6,4 @@ watchdog
 pandas
 matplotlib
 scipy
+seaborn
