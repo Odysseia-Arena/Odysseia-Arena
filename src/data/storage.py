@@ -248,8 +248,10 @@ def sync_models_with_db(conn: Optional[sqlite3.Connection] = None):
                     ))
             
             if models_to_insert:
-                cursor.executemany("INSERT INTO models (model_id, model_name, rating, rating_deviation, volatility, tier, skips) VALUES (?, ?, ?, ?, ?, ?, ?)", models_to_insert)
-                logger.info(f"数据库同步：新增了 {len(models_to_insert)} 个模型: {[m[0] for m in models_to_insert]}")
+                # 使用 INSERT OR IGNORE 避免在模型已存在时出错
+                cursor.executemany("INSERT OR IGNORE INTO models (model_id, model_name, rating, rating_deviation, volatility, tier, skips) VALUES (?, ?, ?, ?, ?, ?, ?)", models_to_insert)
+                if cursor.rowcount > 0:
+                    logger.info(f"数据库同步：新增了 {cursor.rowcount} 个模型。")
 
         # 4. 更新现有模型的名称 (实现名称热更新)
         models_to_update = []

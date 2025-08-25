@@ -47,9 +47,19 @@ GENERATION_TIMEOUT = 12 * 60      # 12分钟生成超时
 # --- 等级与升降级系统配置 ---
 PROMOTION_RELEGATION_COUNT = 3      # 每日升降级模型的数量
 TRANSITION_ZONE_SIZE = 3          # 过渡区大小（从每个等级中选出N个模型）
-TRANSITION_ZONE_PROBABILITY = 0.3 # 匹配到过渡区对战的概率 (15%)
-# 全局随机匹配概率：有一定概率直接从所有模型中抽样，不受分级/过渡区限制
-GLOBAL_RANDOM_MATCH_PROBABILITY = float(os.getenv("GLOBAL_RANDOM_MATCH_PROBABILITY", 0.20))
+# --- 动态加载的匹配概率 ---
+def get_match_probabilities() -> dict:
+    """
+    动态加载并返回匹配概率，以实现热重载。
+    每次调用此函数都会重新加载 .env 文件。
+    """
+    load_dotenv() # 重新加载 .env 文件
+    
+    probabilities = {
+        "transition_zone": float(os.getenv("TRANSITION_ZONE_PROBABILITY", 0.18)),
+        "cross_tier_challenge": float(os.getenv("GLOBAL_RANDOM_MATCH_PROBABILITY", 0.20))
+    }
+    return probabilities
 
 # --- 热更新配置 ---
 class HotReloadConfig:

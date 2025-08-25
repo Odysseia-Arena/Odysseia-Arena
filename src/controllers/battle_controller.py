@@ -124,64 +124,85 @@ def select_models_for_battle(tier: str, prompt_id: str, exclude_ids: List[str] =
         low_tier_models = [m for m in low_tier_models if m['id'] not in exclude_set]
         transition_zone_models = [m for m in transition_zone_models if m['id'] not in exclude_set]
 
-    # 0. 全局随机匹配：有一定概率忽略分级，直接从所有活动模型中抽样
-    if random.random() < config.GLOBAL_RANDOM_MATCH_PROBABILITY:
-        logger.info("触发全局随机匹配概率，忽略 tier 与过渡区，直接从全部活动模型中抽样。")
+    # --- 新版匹配逻辑：用户选择的等级 (tier) 是最高优先级 ---
+
+    # --- 新版匹配逻辑：用户选择的等级 (tier) 是最高优先级 ---
+
+    # 1. 动态加载最新的匹配概率
+    match_probabilities = config.get_match_probabilities()
+    cross_tier_prob = match_probabilities['cross_tier_challenge']
+    transition_zone_prob = match_probabilities['transition_zone']
+
+    # 2. 定义基础池 (base_pool) 和对手池 (opponent_pool)
+    base_pool = high_tier_models if tier == 'high_tier' else low_tier_models
+    opponent_pool = None
+    match_type = "常规匹配"
+
+    # 3. 根据概率决定对手池
+    rand_val = random.random()
+    if rand_val < cross_tier_prob:
+        # 模式A: 跨级挑战 (指定等级 vs. 全集)
+        match_type = "跨级挑战"
+        all_models_pool = high_tier_models + low_tier_models
+        if len(all_models_pool) >= 1:
+             opponent_pool = all_models_pool
+        logger.info(f"触发“{match_type}”概率 ({cross_tier_prob:.0%})，对手将从全部模型中选择。")
+
+    elif rand_val < cross_tier_prob + transition_zone_prob:
+        # 模式B: 过渡区挑战 (优化版)
+        # 确保两个模型都来自过渡区，且至少一个符合用户选择的等级
+        match_type = "过渡区挑战"
+        
+        # 1. 对手池是整个过渡区
+        if len(transition_zone_models) >= 1:
+            opponent_pool = transition_zone_models
+        
+        # 2. 基础池是用户选择等级与过渡区的交集
+        user_tier_in_transition = [m for m in transition_zone_models if m in base_pool]
+        
+        if user_tier_in_transition:
+            # 如果交集不为空，则使用交集作为新的基础池
+            base_pool = user_tier_in_transition
+            logger.info(f"触发“{match_type}”概率，基础模型将从 {tier} 的过渡区部分选择，对手将从整个过渡区选择。")
+        else:
+            # 如果用户选择的等级在过渡区中不存在（不太可能发生但做兼容），则退回到常规匹配
+            opponent_pool = None
+            logger.warning(f"在“{match_type}”中，用户选择的 {tier} 在过渡区无模型，退回到常规匹配。")
+    
+    # 如果没有触发特殊匹配，或者特殊匹配的对手池为空，则退回到常规匹配
+    if opponent_pool is None:
+        # 模式C: 常规匹配 (指定等级 vs. 指定等级)
+        match_type = "常规匹配"
+        opponent_pool = base_pool
+        logger.info(f"执行“{match_type}”，对手将从 {tier} 中选择。")
+
+    # 3. 合法性检查
+    if not base_pool or not opponent_pool:
+        # 极端情况：如果基础池或对手池为空，则使用所有模型作为最后手段
+        logger.warning("基础池或对手池为空，启用备用逻辑：使用全部模型进行匹配。")
         all_models = high_tier_models + low_tier_models
         if len(all_models) < 2:
-            raise ValueError("活动模型总数少于两个，无法开始对战。")
-        weights = [model.get("weight", 1.0) for model in all_models]
-        if all(w <= 0 for w in weights):
-            # 如果所有权重都是非正数，退回到均匀抽样
-            return tuple(random.sample(all_models, 2))
-        while True:
-            chosen_models = random.choices(all_models, weights=weights, k=2)
-            if chosen_models[0]['id'] != chosen_models[1]['id']:
-                return chosen_models[0], chosen_models[1]
+             raise ValueError("活动模型总数少于两个，无法开始对战。")
+        base_pool = opponent_pool = all_models
+    
+    # 4. 执行抽样
+    base_weights = [m.get("weight", 1.0) for m in base_pool]
+    opponent_weights = [m.get("weight", 1.0) for m in opponent_pool]
 
-    target_pool = []
-    use_transition_zone = random.random() < config.TRANSITION_ZONE_PROBABILITY
+    max_attempts = 20 # 设置最大尝试次数以避免在池子高度重叠且数量少时发生死循环
+    for _ in range(max_attempts):
+        model_1 = random.choices(base_pool, weights=base_weights, k=1)[0]
+        model_2 = random.choices(opponent_pool, weights=opponent_weights, k=1)[0]
+        
+        if model_1['id'] != model_2['id']:
+            return model_1, model_2
 
-    # 1. 根据概率和等级选择主目标池
-    if use_transition_zone and len(transition_zone_models) >= 2:
-        logger.info(f"触发概率，为 {tier} 对战选择过渡区模型。")
-        target_pool = transition_zone_models
-    elif tier == 'high_tier':
-        target_pool = high_tier_models
-    else:  # low_tier
-        target_pool = low_tier_models
-
-    # 2. 如果主目标池模型数量不足，则使用备用池
-    if len(target_pool) < 2:
-        logger.info(f"主目标池模型不足 (数量: {len(target_pool)})，尝试使用备用池。")
-        if len(transition_zone_models) >= 2:
-            logger.info("使用过渡区作为备用池。")
-            target_pool = transition_zone_models
-        elif tier == 'high_tier' and len(low_tier_models) >= 2:
-            logger.info("高端局备用池使用低端模型。")
-            target_pool = low_tier_models
-        elif tier == 'low_tier' and len(high_tier_models) >= 2:
-            logger.info("低端局备用池使用高端模型。")
-            target_pool = high_tier_models
-        else:
-            # 如果所有池都少于2个模型，将所有可用模型合并作为最后手段
-            all_models = high_tier_models + low_tier_models
-            if len(all_models) < 2:
-                raise ValueError("活动模型总数少于两个，无法开始对战。")
-            target_pool = all_models
-            logger.warning("所有分池均不足，使用全部活动模型作为最后备选。")
-
-
-    # 3. 使用加权随机抽样从最终的目标池中选择两个不同的模型
-    weights = [model.get("weight", 1.0) for model in target_pool]
-    if all(w <= 0 for w in weights):
-        # 如果所有权重都是非正数，退回到均匀抽样
-        return random.sample(target_pool, 2)
-
-    while True:
-        chosen_models = random.choices(target_pool, weights=weights, k=2)
-        if chosen_models[0]['id'] != chosen_models[1]['id']:
-            return chosen_models[0], chosen_models[1]
+    # 如果多次尝试后仍然失败，则退回到最简单的均匀抽样
+    logger.warning(f"在 {match_type} 模式下多次尝试无法选出两个不同模型，退回到最终备用方案：从合并池中均匀抽样。")
+    combined_pool = list({m['id']: m for m in base_pool + opponent_pool}.values())
+    if len(combined_pool) < 2:
+        raise ValueError("合并后的备用池模型总数少于两个，无法开始对战。")
+    return tuple(random.sample(combined_pool, 2))
 
 async def create_battle(battle_type: str, custom_prompt: str = None, discord_id: str = None) -> Optional[Dict]:
     """

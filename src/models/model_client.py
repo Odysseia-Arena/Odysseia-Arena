@@ -21,7 +21,7 @@ def _strip_think_block(text: str) -> str:
     """移除响应文本中被 <think>...</think> 包裹的内容。"""
     return re.sub(r'<think>.*?</think>\s*', '', text, flags=re.DOTALL).strip()
 
-async def _call_openai_format(session: AsyncSession, model_id_to_call: str, prompt: str, api_key: str, api_url: str) -> str:
+async def _call_openai_format(session: AsyncSession, model_id_to_call: str, prompt: str, api_key: str, api_url: str, model_config: dict) -> str:
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
@@ -32,6 +32,11 @@ async def _call_openai_format(session: AsyncSession, model_id_to_call: str, prom
         "temperature": 1.0,
         "stream": False
     }
+    
+    # 根据模型配置动态添加 thinking 参数
+    if model_config.get("enable_thinking"):
+        payload["thinking"] = {"type": "enabled"}
+
     response = await session.post(
         api_url, headers=headers, json=payload, timeout=60, impersonate="chrome110"
     )
@@ -108,9 +113,11 @@ async def call_model(model: dict, prompt: str) -> str:
                     try:
                         print(f"INFO: 调用模型 '{public_id}' (渠道: {model_id_to_call}, Key #{key_index + 1}, 尝试 #{attempt + 1})")
                         if api_format == 'anthropic':
+                            # 注意：anthropic 格式调用也需要传递 model 字典，以备未来扩展
                             return await _call_anthropic_format(session, model_id_to_call, prompt, api_key, api_url)
                         else:
-                            return await _call_openai_format(session, model_id_to_call, prompt, api_key, api_url)
+                            # 将完整的 model 字典传递给 openai 格式调用函数
+                            return await _call_openai_format(session, model_id_to_call, prompt, api_key, api_url, model_config=model)
                     
                     except Exception as e:
                         last_exception = e
