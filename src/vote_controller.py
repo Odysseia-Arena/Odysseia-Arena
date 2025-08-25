@@ -3,7 +3,7 @@ import time
 import hashlib
 from typing import Dict
 from . import storage
-from . import elo_rating
+from . import glicko2_rating as elo_rating
 from . import config
 
 # 1. 定义自定义异常以处理事务回滚控制流

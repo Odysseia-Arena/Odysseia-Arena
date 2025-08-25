@@ -109,7 +109,9 @@
         {
             "rank": 1,
             "model_name": "gpt-4.1",
-            "rating": 1250,
+            "rating": 1550,
+            "rating_deviation": 85,
+            "volatility": 0.059,
             "battles": 15,
             "wins": 10,
             "ties": 3,
@@ -118,7 +120,9 @@
         {
             "rank": 2,
             "model_name": "gemini-2.5-pro",
-            "rating": 1230,
+            "rating": 1520,
+            "rating_deviation": 92,
+            "volatility": 0.06,
             "battles": 12,
             "wins": 7,
             "ties": 2,
@@ -129,9 +133,11 @@
 ```
 
 **说明**:
-- 使用ELO评分系统（初始评分1200，K因子32）
-- 胜率计算公式：`(wins + 0.5 * ties) / battles * 100`
-- 平局算作半场胜利
+- **评分系统**: 使用 Glicko-2 评分系统。
+  - `rating`: 模型评分（初始值 1500）。
+  - `rating_deviation` (RD): 评分偏差。值越低，表示我们对该模型的评分越确定。
+  - `volatility`: 波动性。衡量模型评分不稳定程度的指标。
+- **胜率计算**: `(wins + 0.5 * ties) / battles * 100`，平局算作半场胜利。
 
 ### 4. 获取对战详情
 **端点**: `GET /battle/{battle_id}`

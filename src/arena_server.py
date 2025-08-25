@@ -10,7 +10,7 @@ from . import config
 from . import storage
 from . import battle_controller
 from . import vote_controller
-from . import elo_rating
+from . import glicko2_rating as elo_rating
 from .battle_controller import RateLimitError
 from . import battle_cleaner
 from .logger_config import log_event, log_error, logger
