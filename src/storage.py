@@ -4,7 +4,7 @@ import os
 import sqlite3
 import threading
 import time
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from contextlib import contextmanager
 from typing import Optional
 from . import config
@@ -94,7 +94,7 @@ def initialize_storage():
     with transaction() as conn:
         cursor = conn.cursor()
         
-        # 1. 模型评分表 (models)
+        # 1. 模型评分表 (models) - 新增 tier 字段
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS models (
                 model_id TEXT PRIMARY KEY,
@@ -103,7 +103,8 @@ def initialize_storage():
                 battles INTEGER DEFAULT 0 NOT NULL,
                 wins INTEGER DEFAULT 0 NOT NULL,
                 ties INTEGER DEFAULT 0 NOT NULL,
-                is_active BOOLEAN DEFAULT 1 NOT NULL
+                is_active BOOLEAN DEFAULT 1 NOT NULL,
+                tier TEXT DEFAULT 'low' NOT NULL 
             );
         """)
 
@@ -168,10 +169,14 @@ def sync_models_with_db(conn: Optional[sqlite3.Connection] = None):
             models_to_insert = []
             for model_obj in current_models:
                 if model_obj['id'] in new_model_ids:
-                    models_to_insert.append((model_obj['id'], model_obj['name'], config.DEFAULT_ELO_RATING))
+                    # 新模型默认等级为 'low'
+                    models_to_insert.append((model_obj['id'], model_obj['name'], config.DEFAULT_ELO_RATING, 'low'))
             
             if models_to_insert:
-                cursor.executemany("INSERT INTO models (model_id, model_name, rating) VALUES (?, ?, ?)", models_to_insert)
+                cursor.executemany(
+                    "INSERT INTO models (model_id, model_name, rating, tier) VALUES (?, ?, ?, ?)", 
+                    models_to_insert
+                )
                 logger.info(f"数据库同步：新增了 {len(models_to_insert)} 个模型: {[m[0] for m in models_to_insert]}")
 
         # 4. 更新现有模型的名称 (实现名称热更新)
@@ -297,6 +302,15 @@ def get_latest_battle_by_discord_id(discord_id: str) -> Optional[Dict]:
 
 # --- 模型评分管理 ---
 
+def update_model_tiers(updates: List[Tuple[str, str]]):
+    """
+    批量更新模型的等级 (tier)。
+    :param updates: 一个元组列表，每个元组为 (new_tier, model_id)
+    """
+    with db_access() as conn:
+        conn.executemany("UPDATE models SET tier = ? WHERE model_id = ?", updates)
+
+
 def set_model_active_status(model_id: str, is_active: bool) -> bool:
     """设置模型的活动状态"""
     with db_access() as conn:
@@ -307,13 +321,14 @@ def set_model_active_status(model_id: str, is_active: bool) -> bool:
         return cursor.rowcount > 0
 
 def get_model_scores() -> Dict[str, Dict]:
-    """获取所有模型的评分"""
+    """获取所有模型的评分和统计信息（包括tier）"""
     scores = {}
     with db_access() as conn:
         cursor = conn.execute("SELECT * FROM models")
         for row in cursor.fetchall():
             model_id = row["model_id"]
             stats = dict(row)
+            # dict(row) 会自动包含所有列，包括新增的 tier
             if "model_id" in stats:
                  del stats["model_id"]
             scores[model_id] = stats

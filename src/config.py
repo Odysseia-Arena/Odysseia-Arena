@@ -29,6 +29,11 @@ ENABLE_SERIAL_BATTLE_LIMIT = os.getenv("ENABLE_SERIAL_BATTLE_LIMIT", "False").lo
 # --- 对战清理配置 ---
 GENERATION_TIMEOUT = 30 * 60      # 30分钟生成超时
 
+# --- 等级与升降级系统配置 ---
+PROMOTION_RELEGATION_COUNT = 3      # 每日升降级模型的数量
+TRANSITION_ZONE_SIZE = 3          # 过渡区大小（从每个等级中选出N个模型）
+TRANSITION_ZONE_PROBABILITY = 0.15 # 匹配到过渡区对战的概率 (15%)
+
 # --- 热更新配置 ---
 class HotReloadConfig:
     def __init__(self, file_path, loader_func):

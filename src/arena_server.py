@@ -15,6 +15,7 @@ from .battle_controller import RateLimitError
 from . import battle_cleaner
 from .logger_config import log_event, log_error, logger
 from . import file_watcher
+from . import tier_manager
 
 # 初始化FastAPI应用
 app = FastAPI(title="创意写作大模型竞技场后端", version="1.0.0")
@@ -45,9 +46,12 @@ async def startup_event():
     
     logger.info("配置验证通过，开始初始化存储...")
     try:
-        # 初始化存储（创建文件和初始评分）
+        # 初始化存储（创建表和字段）
         storage.initialize_storage()
         
+        # 初始化模型等级（如果需要）
+        tier_manager.initialize_model_tiers()
+
         # 在启动时加载一次以获取数量
         prompts_count = len(config.load_fixed_prompts())
         models_count = len(config.get_models())
@@ -59,22 +63,25 @@ async def startup_event():
         logger.info(f"服务器启动成功！已加载 {models_count} 个模型，{prompts_count} 个固定提示词。")
     except Exception as e:
         log_error(f"存储初始化失败: {e}", {"step": "initialize_storage"})
-        logger.critical("服务器启动失败：存储初始化错误。")
+        logger.critical("服务器启动失败：存储初始化错误。", exc_info=True)
         # 如果存储初始化失败，服务器不应继续运行
         raise Exception("Server startup failed due to storage initialization error.")
 
     # 启动后台清理任务
     battle_cleaner.run_battle_cleaner()
     
+    # 启动每日升降级任务
+    battle_cleaner.run_promotion_relegation_scheduler()
+
     # 启动配置文件热更新监控
     file_watcher.start_file_watcher()
 
 # --- Pydantic模型定义（用于请求体验证和响应结构） ---
 
 class BattleRequest(BaseModel):
-    # 默认为第一阶段的固定提示词对战
-    battle_type: str = "fixed"
-    # 第二阶段的自定义提示词（可选，功能已实现但暂时隐藏）
+    # 对战类型，现在是 'high_tier' 或 'low_tier'
+    battle_type: str
+    # 自定义提示词字段保留，但当前逻辑不使用
     custom_prompt: Optional[str] = None
     discord_id: Optional[str] = None # 添加 discord_id 字段
 
@@ -95,9 +102,13 @@ async def create_battle(request_body: BattleRequest):
     """创建新的对战"""
     logger.info(f"Received request for /battle from discord_id: {request_body.discord_id}")
     try:
-        # 第一阶段限制：只支持 fixed
-        # 实时对战逻辑现在由 battle_controller 处理
-        # battle_type 和 custom_prompt 的验证也移到 controller 中
+        # 验证对战类型是否有效
+        if request_body.battle_type not in ["high_tier", "low_tier"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="无效的对战类型。请选择 'high_tier' (高端) 或 'low_tier' (低端)。"
+            )
+
         battle_details = await battle_controller.create_battle(
             battle_type=request_body.battle_type,
             custom_prompt=request_body.custom_prompt,

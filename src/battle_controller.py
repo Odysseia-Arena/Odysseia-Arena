@@ -3,7 +3,7 @@ import random
 import uuid
 import time
 import asyncio
-from typing import Dict, Tuple
+from typing import Dict, Tuple, List
 from . import config
 from . import storage
 from . import model_client
@@ -46,33 +46,92 @@ def _check_rate_limit(discord_id: str):
             message = f"创建对战过于频繁，请在 {int(config.MIN_BATTLE_INTERVAL - time_since_last_battle)} 秒后重试。"
             raise RateLimitError(message, available_at=available_at)
 
-def select_random_models(available_models: list) -> Tuple[dict, dict]:
-    """根据权重随机选择两个不同的、处于活动状态的模型对象进行对战"""
-    # 首先，从所有可用模型中筛选出活动模型
-    # 我们从数据库获取完整的模型信息，包括 is_active 状态
+def _get_model_tiers() -> Tuple[List[Dict], List[Dict], List[Dict]]:
+    """
+    从数据库获取模型并划分高、低和过渡区。
+    返回: (高端模型列表, 低端模型列表, 过渡区模型列表)
+    """
     all_scores = storage.get_model_scores()
-    active_model_ids = {model_id for model_id, stats in all_scores.items() if stats.get("is_active", 1)}
+    config_models = {m['id']: m for m in config.get_models()}
     
-    # 根据活动模型ID列表来过滤从 config.get_models() 加载的模型列表
-    active_models_config = [m for m in available_models if m['id'] in active_model_ids]
+    # 1. 筛选出在配置中存在且处于活动状态的模型
+    active_models_stats = {
+        model_id: stats for model_id, stats in all_scores.items() 
+        if stats.get("is_active", 1) and model_id in config_models
+    }
 
-    if len(active_models_config) < 2:
-        raise ValueError("活动模型少于两个，无法开始对战。")
-
-    # 提取模型和对应的权重，如果模型没有权重，则默认为1.0
-    models = active_models_config
-    weights = [model.get("weight", 1.0) for model in models]
+    # 2. 按数据库中记录的等级进行划分，并按评分排序
+    high_tier_stats = sorted(
+        [item for item in active_models_stats.items() if item[1].get('tier') == 'high'],
+        key=lambda item: item[1]["rating"],
+        reverse=True
+    )
+    low_tier_stats = sorted(
+        [item for item in active_models_stats.items() if item[1].get('tier') == 'low'],
+        key=lambda item: item[1]["rating"],
+        reverse=True
+    )
     
-    # 检查权重是否都为非正数，如果是，则无法进行加权抽样
+    # 3. 将排序后的模型ID转换为完整的模型配置对象
+    high_tier_models = [config_models[mid] for mid, stats in high_tier_stats]
+    low_tier_models = [config_models[mid] for mid, stats in low_tier_stats]
+
+    # 4. 定义过渡区：高端局的末尾N个 + 低端局的头部N个
+    transition_size = config.TRANSITION_ZONE_SIZE
+    transition_zone_models = high_tier_models[-transition_size:] + low_tier_models[:transition_size]
+
+    return high_tier_models, low_tier_models, transition_zone_models
+
+def select_models_for_battle(tier: str) -> Tuple[dict, dict]:
+    """
+    根据选择的等级（'high_tier' 或 'low_tier'）和概率选择两个模型。
+    """
+    if tier not in ['high_tier', 'low_tier']:
+        raise ValueError(f"无效的对战等级: {tier}")
+
+    high_tier_models, low_tier_models, transition_zone_models = _get_model_tiers()
+
+    target_pool = []
+    use_transition_zone = random.random() < config.TRANSITION_ZONE_PROBABILITY
+
+    # 1. 根据概率和等级选择主目标池
+    if use_transition_zone and len(transition_zone_models) >= 2:
+        print(f"[{time.ctime()}] 触发概率，为 {tier} 对战选择过渡区模型。")
+        target_pool = transition_zone_models
+    elif tier == 'high_tier':
+        target_pool = high_tier_models
+    else:  # low_tier
+        target_pool = low_tier_models
+
+    # 2. 如果主目标池模型数量不足，则使用备用池
+    if len(target_pool) < 2:
+        print(f"[{time.ctime()}] 主目标池模型不足，尝试使用备用池。")
+        if len(transition_zone_models) >= 2:
+            print(f"[{time.ctime()}] 使用过渡区作为备用池。")
+            target_pool = transition_zone_models
+        elif tier == 'high_tier' and len(low_tier_models) >= 2:
+            print(f"[{time.ctime()}] 高端局备用池使用低端模型。")
+            target_pool = low_tier_models
+        elif tier == 'low_tier' and len(high_tier_models) >= 2:
+            print(f"[{time.ctime()}] 低端局备用池使用高端模型。")
+            target_pool = high_tier_models
+        else:
+            # 如果所有池都少于2个模型，将所有可用模型合并作为最后手段
+            all_models = high_tier_models + low_tier_models
+            if len(all_models) < 2:
+                raise ValueError("活动模型总数少于两个，无法开始对战。")
+            target_pool = all_models
+            print(f"[{time.ctime()}] 所有分池均不足，使用全部活动模型作为最后备选。")
+
+
+    # 3. 使用加权随机抽样从最终的目标池中选择两个不同的模型
+    weights = [model.get("weight", 1.0) for model in target_pool]
     if all(w <= 0 for w in weights):
-        # 在这种情况下，退回到均匀抽样
-        model_a, model_b = random.sample(models, 2)
-        return model_a, model_b
+        # 如果所有权重都是非正数，退回到均匀抽样
+        return random.sample(target_pool, 2)
 
-    # 使用 random.choices 进行加权抽样，一次性抽取两个
-    # 注意：choices 可能会选出两个相同的模型，所以需要循环直到选出两个不同的
     while True:
-        chosen_models = random.choices(models, weights=weights, k=2)
+        chosen_models = random.choices(target_pool, weights=weights, k=2)
         if chosen_models[0]['id'] != chosen_models[1]['id']:
             return chosen_models[0], chosen_models[1]
 
@@ -80,29 +139,22 @@ async def create_battle(battle_type: str, custom_prompt: str = None, discord_id:
     """
     创建一场新的对战。
 
-    :param battle_type: 对战类型 ("fixed" 或 "custom")
-    :param custom_prompt: 自定义提示词 (仅在 battle_type="custom" 时使用)
+    :param battle_type: 对战类型 ("high_tier" 或 "low_tier")
+    :param custom_prompt: 自定义提示词 (当前版本未使用)
     :param discord_id: 用户的 Discord ID (可选)
     :return: 匿名化的对战详情
     """
     # 0. 速率限制检查
     _check_rate_limit(discord_id)
 
-    # 1. 选择提示词
-    if battle_type == "fixed":
-        fixed_prompts = config.load_fixed_prompts()
-        if not fixed_prompts:
-             raise ValueError("固定提示词列表为空或无法加载。")
-        prompt = random.choice(fixed_prompts)
-    elif battle_type == "custom":
-        if not custom_prompt:
-            raise ValueError("自定义对战必须提供提示词。")
-        prompt = custom_prompt
-    else:
-        raise ValueError(f"无效的对战类型: {battle_type}")
-
-    # 2. 选择模型对象 (select_random_models 内部会处理活动模型的过滤)
-    model_a, model_b = select_random_models(config.get_models())
+    # 1. 选择提示词 (所有分级对战都使用固定提示词)
+    fixed_prompts = config.load_fixed_prompts()
+    if not fixed_prompts:
+         raise ValueError("固定提示词列表为空或无法加载。")
+    prompt = random.choice(fixed_prompts)
+    
+    # 2. 选择对战模型
+    model_a, model_b = select_models_for_battle(battle_type)
 
     # 3. 立即创建占位记录以锁定速率
     battle_id = str(uuid.uuid4())

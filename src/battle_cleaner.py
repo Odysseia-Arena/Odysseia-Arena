@@ -3,9 +3,11 @@ import time
 import threading
 from . import storage
 from . import config
+from . import tier_manager
 
 BATTLE_TIMEOUT_MINUTES = 30
 CLEANUP_INTERVAL_SECONDS = 300  # 5 minutes
+PROMOTION_RELEGATION_INTERVAL_SECONDS = 24 * 60 * 60  # 24 hours
 
 def cleanup_expired_battles():
     """
@@ -24,10 +26,6 @@ def cleanup_expired_battles():
                     battle_id = battle['battle_id']
                     model_a_id = battle['model_a_id']
                     model_b_id = battle['model_b_id']
-                    if model_a_id in all_scores:
-                        all_scores[model_a_id]['battles'] = max(0, all_scores[model_a_id]['battles'] - 1)
-                    if model_b_id in all_scores:
-                        all_scores[model_b_id]['battles'] = max(0, all_scores[model_b_id]['battles'] - 1)
                     storage.delete_battle_record(battle_id)
                     print(f"    - Deleted pending_vote battle {battle_id}.")
                 storage.save_model_scores(all_scores)
@@ -65,3 +63,18 @@ def run_battle_cleaner():
     cleaner_thread = threading.Thread(target=task, daemon=True)
     cleaner_thread.start()
     print("Battle cleaner background task started.")
+
+def run_promotion_relegation_scheduler():
+    """
+    启动一个后台线程，定期运行模型升降级任务。
+    """
+    def task():
+        # 首次运行时先等待一小段时间，确保服务器完全启动
+        time.sleep(10)
+        while True:
+            tier_manager.promote_and_relegate_models()
+            time.sleep(PROMOTION_RELEGATION_INTERVAL_SECONDS)
+
+    scheduler_thread = threading.Thread(target=task, daemon=True)
+    scheduler_thread.start()
+    print("Promotion/relegation background task started.")
