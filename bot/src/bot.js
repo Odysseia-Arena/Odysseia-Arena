@@ -55,6 +55,24 @@ function allowedUserRoleMentions() {
 // 用于存储进行中的对战信息
 const activeBattles = new Map();
 
+// --- 新增：格式化模型名称，添加专属Emoji ---
+function formatModelName(modelName) {
+  if (!modelName) return 'N/A';
+  const lowerCaseName = modelName.toLowerCase();
+  if (lowerCaseName.includes('gemini')) return `<:Gemini:1397074784520765522> ${modelName}`;
+  if (lowerCaseName.includes('claude')) return `<:Claude:1300123863329406998> ${modelName}`;
+  if (lowerCaseName.includes('gpt')) return `<:Gpt_purple:1398207128451416084> ${modelName}`;
+  if (lowerCaseName.includes('grok')) return `<:Grok:1397075985706385561> ${modelName}`;
+  if (lowerCaseName.includes('kimi')) return `<:Kimi:1397069865239707841> ${modelName}`;
+  if (lowerCaseName.includes('deepseek')) return `<:Deepseek:1397067318902788106> ${modelName}`;
+  if (lowerCaseName.includes('glm')) return `<:GLM:1399344285870063647> ${modelName}`;
+  if (lowerCaseName.includes('qwen')) return `<:Qwen:1397067824287060068> ${modelName}`;
+  if (lowerCaseName.includes('anon')) return `<:__:1331570533078274061> ${modelName}`;
+  if (lowerCaseName.includes('doubao')) return `<:doubao:1409041294218756159> ${modelName}`;
+  if (lowerCaseName.includes('step')) return `<:step:1409011619924803624> ${modelName}`;
+  return modelName;
+}
+
 client.on('ready', () => {
   console.log(`✅ 机器人 ${client.user.tag} 已上线并准备就绪`);
 });
@@ -80,10 +98,10 @@ async function sendPaginatedLeaderboard(interaction, leaderboard, title) {
     let description = '';
     pagedItems.forEach((model, index) => {
       const rank = interaction.commandName === 'leaderboard' ? model.rank : start + index + 1;
-      description += `**${rank}. ${model.model_name}**\n`;
+      description += `## **${rank}. ${formatModelName(model.model_name)}**\n`;
       description += `> **评分:** ${model.rating} (评分偏差: ${model.rating_deviation}, 波动率: ${model.volatility.toFixed(3)})\n`;
       description += `> **胜率:** ${model.win_rate_percentage.toFixed(2)}%\n`;
-      description += `> **对战:** ${model.battles} (胜: ${model.wins}, 平: ${model.ties}, 跳过: ${model.skips})\n\n`;
+      description += `> **对战:** ${model.battles} (胜: ${model.wins}, 平: ${model.ties}, 跳过: ${model.skips})\n`;
     });
 
     return new EmbedBuilder()
@@ -163,11 +181,11 @@ async function sendPaginatedLeaderboard(interaction, leaderboard, title, nextUpd
       const ratingDiff = model.rating_realtime - model.rating;
       const ratingSymbol = ratingDiff > 0 ? '🔼' : (ratingDiff < 0 ? '🔽' : '');
       
-      description += `**${rank}. ${model.model_name}**\n`;
+      description += `# **${rank}. ${formatModelName(model.model_name)}**\n`;
       description += `> **评分:** ${model.rating} -> **${model.rating_realtime}** ${ratingSymbol}\n`;
       description += `> **(评分偏差:** ${model.rating_deviation} -> **${model.rating_deviation_realtime}** / **波动率:** ${model.volatility.toFixed(3)} -> **${model.volatility_realtime.toFixed(3)}**)\n`;
       description += `> **胜率:** ${model.win_rate_percentage.toFixed(2)}%\n`;
-      description += `> **对战:** ${model.battles} (胜: ${model.wins}, 平: ${model.ties}, 跳过: ${model.skips})\n\n`;
+      description += `> **对战:** ${model.battles} (胜: ${model.wins}, 平: ${model.ties}, 跳过: ${model.skips})\n`;
     });
 
     const nextUpdate = new Date(nextUpdateTime);
@@ -653,8 +671,8 @@ async function handleCommand(interaction) {
         }
 
         embed.addFields(
-          { name: '模型 A 名称', value: data.model_a || 'N/A', inline: true },
-          { name: '模型 B 名称', value: data.model_b || 'N/A', inline: true },
+          { name: '模型 A 名称', value: formatModelName(data.model_a), inline: true },
+          { name: '模型 B 名称', value: formatModelName(data.model_b), inline: true },
           { name: '获胜者', value: winnerText, inline: false }
         );
       }
@@ -833,8 +851,8 @@ async function handleCommand(interaction) {
             else if (battle.winner === 'Skipped') winnerText = '跳过';
             else if (battle.winner) winnerText = battle.winner;
             embed.addFields(
-              { name: '模型 A 名称', value: battle.model_a || 'N/A', inline: true },
-              { name: '模型 B 名称', value: battle.model_b || 'N/A', inline: true },
+              { name: '模型 A 名称', value: formatModelName(battle.model_a), inline: true },
+              { name: '模型 B 名称', value: formatModelName(battle.model_b), inline: true },
               { name: '获胜者', value: winnerText, inline: false }
             );
         }
@@ -1004,8 +1022,8 @@ async function handleVoteButton(interaction, battleId, choice) {
         .setFooter({ text: `对战 ID: ${battleId}\n状态: 已完成` })
         .addFields(
           { name: '获胜者', value: `**${winnerText}**`, inline: false },
-          { name: '模型 A 名称', value: voteResult.model_a_name, inline: true },
-          { name: '模型 B 名称', value: voteResult.model_b_name, inline: true },
+          { name: '模型 A 名称', value: formatModelName(voteResult.model_a_name), inline: true },
+          { name: '模型 B 名称', value: formatModelName(voteResult.model_b_name), inline: true },
           { name: '❗ 注意', value: '此对战的完整内容将在5分钟后销毁，请及时通过下方按钮查看或保存。' }
         );
 
