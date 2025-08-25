@@ -164,6 +164,17 @@ def initialize_storage():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_voting_history_timestamp_desc ON voting_history (timestamp DESC);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_voting_history_user_hash ON voting_history (user_hash);")
 
+        # 4. 待处理比赛表 (pending_matches) - 用于周期性评分更新
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pending_matches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                model_a_id TEXT NOT NULL,
+                model_b_id TEXT NOT NULL,
+                outcome REAL NOT NULL, -- 1.0 for A win, 0.5 for tie, 0.0 for B win
+                timestamp REAL NOT NULL
+            );
+        """)
+
         # --- 模型数据同步 ---
         sync_models_with_db(conn)
 
@@ -375,8 +386,8 @@ def save_model_scores(scores: Dict[str, Dict]):
     data_to_update = []
     for model_id, stats in scores.items():
         data_to_update.append((
-            stats["model_name"], stats["rating"], stats.get("rating_deviation", 350.0),
-            stats.get("volatility", 0.06), stats["battles"],
+            stats["model_name"], stats["rating"], stats.get("rating_deviation", config.GLICKO2_DEFAULT_RD),
+            stats.get("volatility", config.GLICKO2_DEFAULT_VOL), stats["battles"],
             stats["wins"], stats.get("ties", 0), model_id
         ))
 
@@ -387,6 +398,26 @@ def save_model_scores(scores: Dict[str, Dict]):
             battles = ?, wins = ?, ties = ?
             WHERE model_id = ?
         """, data_to_update)
+
+# --- 待处理比赛管理 (用于周期性更新) ---
+
+def add_pending_match(model_a_id: str, model_b_id: str, outcome: float):
+    """添加一场待处理的比赛结果"""
+    with db_access() as conn:
+        conn.execute(
+            "INSERT INTO pending_matches (model_a_id, model_b_id, outcome, timestamp) VALUES (?, ?, ?, ?)",
+            (model_a_id, model_b_id, outcome, time.time())
+        )
+
+def get_and_clear_pending_matches() -> List[Dict]:
+    """原子性地获取并清空所有待处理的比赛"""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT model_a_id, model_b_id, outcome FROM pending_matches")
+        matches = [dict(row) for row in cursor.fetchall()]
+        # 使用 DELETE 而不是 TRUNCATE，因为它在事务中更安全
+        cursor.execute("DELETE FROM pending_matches")
+        return matches
 
 # --- 投票记录管理 ---
 

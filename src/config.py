@@ -17,13 +17,19 @@ DATA_DIR = "data"
 FIXED_PROMPT_RESPONSES_FILE = os.path.join(DATA_DIR, "fixed_prompt_responses.json")
 
 # --- Glicko-2 评分系统配置 ---
+# --- Glicko-2 评分周期配置 ---
+# 定义评分更新的周期（分钟）。
+# 设置为 0 表示实时更新（每场比赛后立即更新）。
+# 设置为大于 0 的值（例如 60）表示每 60 分钟批量更新一次周期内的所有比赛评分。
+RATING_UPDATE_PERIOD_MINUTES = int(os.getenv("RATING_UPDATE_PERIOD_MINUTES", 0))
+
 # Glicko-2 系统常量 (tau)，用于约束波动性随时间的变化。较小的值可防止波动性剧烈变化。
 GLICKO2_TAU = 0.5
-# 新模型的初始评分
-GLICKO2_DEFAULT_RATING = 1500
-# 新模型的初始评分偏差 (Rating Deviation)
-GLICKO2_DEFAULT_RD = 100
-# 新模型的初始波动性 (Volatility)
+# 新模型的初始评分 (rating / mu)
+GLICKO2_DEFAULT_RATING = 1500.0
+# 新模型的初始评分偏差 (rating_deviation / phi)
+GLICKO2_DEFAULT_RD = 350.0
+# 新模型的初始波动性 (volatility / sigma)
 GLICKO2_DEFAULT_VOL = 0.06
 
 # --- 投票与对战速率限制 ---

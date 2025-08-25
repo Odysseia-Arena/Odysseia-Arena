@@ -1,80 +1,121 @@
 # glicko2_rating.py
-from typing import Dict, List, Tuple
+from typing import Dict, List
+from collections import defaultdict
 from . import storage
-from . import glicko2 # 导入我们自己的、修改过的 glicko2 模块
+from . import config
+from . import glicko2_impl as glicko2 # 使用新的核心实现
+
+# --- 全局 Glicko2 环境 ---
+# 初始化一个Glicko2环境实例，使用config中的参数
+# 这是新库的核心设计：一个环境对象，用于处理所有评分计算
+GLICKO2_ENV = glicko2.Glicko2(
+    tau=config.GLICKO2_TAU,
+    mu=config.GLICKO2_DEFAULT_RATING,
+    phi=config.GLICKO2_DEFAULT_RD,
+    sigma=config.GLICKO2_DEFAULT_VOL
+)
 
 def process_battle_result(model_a_id: str, model_b_id: str, winner: str):
     """
-    处理对战结果，使用 Glicko-2 算法更新模型评分和统计数据。
-
-    :param model_a_id: 模型A的ID
-    :param model_b_id: 模型B的ID
-    :param winner: 获胜者 ("model_a", "model_b", 或 "tie")
+    处理单场对战结果（实时更新模式）。
     """
-    # 1. 获取所有模型的当前评分数据
     scores = storage.get_model_scores()
 
-    # 2. 确保模型存在于评分表中
     if model_a_id not in scores or model_b_id not in scores:
         print(f"错误: 尝试更新评分时找不到模型 {model_a_id} 或 {model_b_id}")
         return
 
-    # 3. 为模型A和模型B创建 Glicko-2 Player 对象
+    # 1. 为对战双方创建 Rating 对象 (执行名称转换)
     model_a_stats = scores[model_a_id]
-    player_a = glicko2.Player(
-        rating=model_a_stats['rating'],
-        rd=model_a_stats['rating_deviation'],
-        vol=model_a_stats['volatility']
-    )
+    rating_a = glicko2.Rating(mu=model_a_stats['rating'], phi=model_a_stats['rating_deviation'], sigma=model_a_stats['volatility'])
 
     model_b_stats = scores[model_b_id]
-    player_b = glicko2.Player(
-        rating=model_b_stats['rating'],
-        rd=model_b_stats['rating_deviation'],
-        vol=model_b_stats['volatility']
-    )
+    rating_b = glicko2.Rating(mu=model_b_stats['rating'], phi=model_b_stats['rating_deviation'], sigma=model_b_stats['volatility'])
 
-    # 4. 确定比赛结果值 (1.0 for win, 0.5 for tie, 0.0 for loss)
+    # 2. 确定比赛结果并调用 rate_1vs1
     if winner == "model_a":
-        outcome_a, outcome_b = 1.0, 0.0
+        new_rating_a, new_rating_b = GLICKO2_ENV.rate_1vs1(rating_a, rating_b, drawn=False)
     elif winner == "model_b":
-        outcome_a, outcome_b = 0.0, 1.0
+        # 注意：rate_1vs1的第二个返回值总是输家
+        new_rating_b, new_rating_a = GLICKO2_ENV.rate_1vs1(rating_b, rating_a, drawn=False)
     else:  # tie
-        outcome_a, outcome_b = 0.5, 0.5
+        new_rating_a, new_rating_b = GLICKO2_ENV.rate_1vs1(rating_a, rating_b, drawn=True)
 
-    # 5. 更新评分
-    # player_a 和 player_b 进行了一场比赛
-    player_a.update_player([model_b_stats['rating']], [model_b_stats['rating_deviation']], [outcome_a])
-    player_b.update_player([model_a_stats['rating']], [model_a_stats['rating_deviation']], [outcome_b])
-
-    # 6. 更新 scores 字典中的统计数据
-    # 更新模型A
-    scores[model_a_id]['rating'] = player_a.getRating()
-    scores[model_a_id]['rating_deviation'] = player_a.getRd()
-    scores[model_a_id]['volatility'] = player_a.vol
+    # 3. 更新 scores 字典 (执行名称转换)
+    scores[model_a_id].update({
+        'rating': new_rating_a.mu,
+        'rating_deviation': new_rating_a.phi,
+        'volatility': new_rating_a.sigma,
+    })
     scores[model_a_id]['battles'] += 1
-    if winner == "model_a":
-        scores[model_a_id]['wins'] += 1
-    elif winner == "tie":
-        scores[model_a_id]['ties'] = scores[model_a_id].get('ties', 0) + 1
-    
-    # 更新模型B
-    scores[model_b_id]['rating'] = player_b.getRating()
-    scores[model_b_id]['rating_deviation'] = player_b.getRd()
-    scores[model_b_id]['volatility'] = player_b.vol
-    scores[model_b_id]['battles'] += 1
-    if winner == "model_b":
-        scores[model_b_id]['wins'] += 1
-    elif winner == "tie":
-        scores[model_b_id]['ties'] = scores[model_b_id].get('ties', 0) + 1
+    if winner == "model_a": scores[model_a_id]['wins'] += 1
+    elif winner == "tie": scores[model_a_id]['ties'] = scores[model_a_id].get('ties', 0) + 1
 
-    # 7. 保存更新后的所有模型数据到数据库
+    scores[model_b_id].update({
+        'rating': new_rating_b.mu,
+        'rating_deviation': new_rating_b.phi,
+        'volatility': new_rating_b.sigma,
+    })
+    scores[model_b_id]['battles'] += 1
+    if winner == "model_b": scores[model_b_id]['wins'] += 1
+    elif winner == "tie": scores[model_b_id]['ties'] = scores[model_b_id].get('ties', 0) + 1
+
+    # 4. 保存回数据库
     storage.save_model_scores(scores)
+
+
+def run_rating_update():
+    """
+    执行一个完整的评分更新周期（批量更新模式）。
+    """
+    pending_matches = storage.get_and_clear_pending_matches()
+    if not pending_matches:
+        print("No pending matches to process for this rating period.")
+        return
+
+    scores = storage.get_model_scores()
+    
+    # 1. 将比赛结果聚合到每个模型
+    #    key: model_id, value: list of (actual_score, opponent_rating_obj)
+    series_data = defaultdict(list)
+    for match in pending_matches:
+        model_a_id, model_b_id, outcome = match['model_a_id'], match['model_b_id'], match['outcome']
+        if model_a_id not in scores or model_b_id not in scores:
+            continue
+        
+        # 从数据库字段 (rating, rd, vol) 创建 Rating 对象 (mu, phi, sigma)
+        rating_a = glicko2.Rating(mu=scores[model_a_id]['rating'], phi=scores[model_a_id]['rating_deviation'], sigma=scores[model_a_id]['volatility'])
+        rating_b = glicko2.Rating(mu=scores[model_b_id]['rating'], phi=scores[model_b_id]['rating_deviation'], sigma=scores[model_b_id]['volatility'])
+
+        series_data[model_a_id].append((outcome, rating_b))
+        series_data[model_b_id].append((1.0 - outcome, rating_a))
+
+    # 2. 为每个参赛模型计算新评分
+    updated_ratings = {}
+    for model_id, series in series_data.items():
+        player_stats = scores[model_id]
+        # 从数据库字段 (rating, rd, vol) 创建 Rating 对象 (mu, phi, sigma)
+        current_rating = glicko2.Rating(mu=player_stats['rating'], phi=player_stats['rating_deviation'], sigma=player_stats['volatility'])
+        
+        # 调用核心 rate 方法进行批量更新
+        new_rating = GLICKO2_ENV.rate(current_rating, series)
+        
+        updated_ratings[model_id] = new_rating
+
+    # 3. 将更新后的分数合并回主分数表并保存 (执行名称转换)
+    for model_id, new_rating in updated_ratings.items():
+        scores[model_id].update({
+            'rating': new_rating.mu,
+            'rating_deviation': new_rating.phi,
+            'volatility': new_rating.sigma,
+        })
+    
+    storage.save_model_scores(scores)
+
 
 def generate_leaderboard() -> List[Dict]:
     """
     生成排行榜。
-    直接从数据库读取最新数据，包含 Glicko-2 评分和 RD。
     """
     scores = storage.get_model_scores()
     leaderboard = []
@@ -85,32 +126,28 @@ def generate_leaderboard() -> List[Dict]:
 
         display_name = stats.get("model_name", model_id)
         rating = stats["rating"]
-        rating_deviation = stats.get("rating_deviation", 350.0)
+        rating_deviation = stats.get("rating_deviation", config.GLICKO2_DEFAULT_RD)
+        volatility = stats.get("volatility", config.GLICKO2_DEFAULT_VOL)
         battles = stats["battles"]
         wins = stats["wins"]
         ties = stats.get("ties", 0)
         
-        # 胜率计算保持不变
         win_rate = ((wins + 0.5 * ties) / battles * 100) if battles > 0 else 0
 
-        volatility = stats.get("volatility", 0.06)
-
         leaderboard.append({
-            "model_id": model_id, # 添加 model_id 以便稳定引用
+            "model_id": model_id,
             "model_name": display_name,
-            "rating": round(rating), # 评分取整更美观
-            "rating_deviation": round(rating_deviation), # RD也取整
-            "volatility": round(volatility, 4), # Glicko-2 新增参数
+            "rating": round(rating),
+            "rating_deviation": round(rating_deviation),
+            "volatility": round(volatility, 4),
             "battles": battles,
             "wins": wins,
             "ties": ties,
             "win_rate_percentage": round(win_rate, 2)
         })
 
-    # 按评分降序排序
     leaderboard.sort(key=lambda x: x["rating"], reverse=True)
 
-    # 添加排名
     for i, entry in enumerate(leaderboard):
         entry["rank"] = i + 1
 
