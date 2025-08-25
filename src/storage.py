@@ -113,11 +113,11 @@ def initialize_storage():
 
         if 'rating_deviation' not in columns:
             print("数据库迁移：正在为 'models' 表添加 'rating_deviation' 字段...")
-            cursor.execute("ALTER TABLE models ADD COLUMN rating_deviation REAL DEFAULT 350.0 NOT NULL;")
+            cursor.execute(f"ALTER TABLE models ADD COLUMN rating_deviation REAL DEFAULT {config.GLICKO2_DEFAULT_RD} NOT NULL;")
         
         if 'volatility' not in columns:
             print("数据库迁移：正在为 'models' 表添加 'volatility' 字段...")
-            cursor.execute("ALTER TABLE models ADD COLUMN volatility REAL DEFAULT 0.06 NOT NULL;")
+            cursor.execute(f"ALTER TABLE models ADD COLUMN volatility REAL DEFAULT {config.GLICKO2_DEFAULT_VOL} NOT NULL;")
         
         # 检查并修改 rating 字段的类型，以存储浮点数
         # PRAGMA table_info 在不同 SQLite 版本中返回的类型大小写可能不同
@@ -187,16 +187,33 @@ def sync_models_with_db(conn: Optional[sqlite3.Connection] = None):
         # 3. 插入新模型
         new_model_ids = current_model_ids - existing_model_ids
         if new_model_ids:
+            initial_scores = config.get_initial_scores()
             models_to_insert = []
             for model_obj in current_models:
                 if model_obj['id'] in new_model_ids:
-                    # 为Glicko-2设置初始值
+                    model_id = model_obj['id']
+                    preset_scores = initial_scores.get(model_id)
+                    
+                    if preset_scores:
+                        # 如果在 model_scores.json 中找到预设值
+                        rating = preset_scores.get("rating", config.GLICKO2_DEFAULT_RATING)
+                        # 如果 rd 为 null 或未提供，则使用默认值
+                        rd = preset_scores.get("rd")
+                        if rd is None:
+                            rd = config.GLICKO2_DEFAULT_RD
+                        volatility = preset_scores.get("volatility", config.GLICKO2_DEFAULT_VOL)
+                    else:
+                        # 否则，使用全局默认值
+                        rating = config.GLICKO2_DEFAULT_RATING
+                        rd = config.GLICKO2_DEFAULT_RD
+                        volatility = config.GLICKO2_DEFAULT_VOL
+
                     models_to_insert.append((
-                        model_obj['id'],
+                        model_id,
                         model_obj['name'],
-                        1500.0,  # Glicko-2 初始评分
-                        350.0,   # Glicko-2 初始RD
-                        0.06     # Glicko-2 初始波动率
+                        rating,
+                        rd,
+                        volatility
                     ))
             
             if models_to_insert:

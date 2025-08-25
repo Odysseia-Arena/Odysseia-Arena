@@ -91,7 +91,7 @@
 - **缓存文件**：
   - `fixed_prompt_responses.json` - 预生成的高质量响应
 
-### 5. **elo_rating.py** - ELO评分系统
+### 5. **glicko2_rating.py** - Glicko-2评分系统
 - **职责**：计算和维护模型评分
 - **配置**：
   - 初始评分：1200

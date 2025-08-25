@@ -24,12 +24,13 @@ OTHER DEALINGS IN THE SOFTWARE.
 """
 
 import math
+from . import config
 
 class Player:
     # Class attribute
     # The system constant, which constrains
     # the change in volatility over time.
-    _tau = 0.5
+    _tau = config.GLICKO2_TAU
 
     def getRating(self):
         return (self.__rating * 173.7178) + 1500 
@@ -47,7 +48,7 @@ class Player:
 
     rd = property(getRd, setRd)
      
-    def __init__(self, rating = 1500, rd = 350, vol = 0.06):
+    def __init__(self, rating=config.GLICKO2_DEFAULT_RATING, rd=config.GLICKO2_DEFAULT_RD, vol=config.GLICKO2_DEFAULT_VOL):
         # For testing purposes, preload the values
         # assigned to an unrated player.
         self.setRating(rating)

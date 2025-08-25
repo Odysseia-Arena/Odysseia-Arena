@@ -1,0 +1,162 @@
+{
+    "gemini-2.5-pro": {
+        "rating": 1727.15,
+        "rd": null,
+        "volatility": 0.06
+    },
+    "claude-opus-4-20250514": {
+        "rating": 1695.02,
+        "rd": null,
+        "volatility": 0.06
+    },
+    "doubao-seed-1-6-thinking-250715": {
+        "rating": 1681.0,
+        "rd": null,
+        "volatility": 0.06
+    },
+    "doubao-seed-1-6-250615": {
+        "rating": 1671.58,
+        "rd": null,
+        "volatility": 0.06
+    },
+    "v0-1.5-lg": {
+        "rating": 1664.6,
+        "rd": null,
+        "volatility": 0.06
+    },
+    "claude-3-7-sonnet-20250219": {
+        "rating": 1639.51,
+        "rd": null,
+        "volatility": 0.06
+    },
+    "deepseek-v3.1": {
+        "rating": 1620.71,
+        "rd": null,
+        "volatility": 0.06
+    },
+    "grok-3-preview-02-24": {
+        "rating": 1608.82,
+        "rd": null,
+        "volatility": 0.06
+    },
+    "chatgpt-4o-latest-20250326": {
+        "rating": 1593.19,
+        "rd": null,
+        "volatility": 0.06
+    },
+    "claude-opus-4-1-20250805": {
+        "rating": 1590.08,
+        "rd": null,
+        "volatility": 0.06
+    },
+    "qwen3-235b-a22b-instruct-2507": {
+        "rating": 1584.1,
+        "rd": null,
+        "volatility": 0.06
+    },
+    "gemini-2.5-flash": {
+        "rating": 1570.71,
+        "rd": null,
+        "volatility": 0.06
+    },
+    "kimi-k2-0711-preview": {
+        "rating": 1550.82,
+        "rd": null,
+        "volatility": 0.06
+    },
+    "deepseek-v3.1-thinking": {
+        "rating": 1550.47,
+        "rd": null,
+        "volatility": 0.06
+    },
+    "stepfun-ai/step3": {
+        "rating": 1540.79,
+        "rd": null,
+        "volatility": 0.06
+    },
+    "models/gemini-1.5-pro": {
+        "rating": 1526.57,
+        "rd": null,
+        "volatility": 0.06
+    },
+    "claude-sonnet-4-20250514": {
+        "rating": 1526.24,
+        "rd": null,
+        "volatility": 0.06
+    },
+    "zai-org/GLM-4.5-FP8": {
+        "rating": 1520.56,
+        "rd": null,
+        "volatility": 0.06
+    },
+    "deepseek-ai/DeepSeek-R1-0528": {
+        "rating": 1515.59,
+        "rd": null,
+        "volatility": 0.06
+    },
+    "catalina": {
+        "rating": 1503.74,
+        "rd": null,
+        "volatility": 0.06
+    },
+    "zai-org/GLM-4.5": {
+        "rating": 1500.0,
+        "rd": 350.0,
+        "volatility": 0.06
+    },
+    "grok-4-0709": {
+        "rating": 1465.63,
+        "rd": null,
+        "volatility": 0.06
+    },
+    "gpt-5-chat": {
+        "rating": 1455.78,
+        "rd": null,
+        "volatility": 0.06
+    },
+    "deepseek-v3-0324": {
+        "rating": 1431.87,
+        "rd": null,
+        "volatility": 0.06
+    },
+    "v0-1.5-md": {
+        "rating": 1415.74,
+        "rd": null,
+        "volatility": 0.06
+    },
+    "openai/gpt-oss-120b": {
+        "rating": 1406.24,
+        "rd": null,
+        "volatility": 0.06
+    },
+    "claude-3-5-sonnet-20241022": {
+        "rating": 1349.35,
+        "rd": null,
+        "volatility": 0.06
+    },
+    "claude-3-5-haiku-20241022": {
+        "rating": 1302.14,
+        "rd": null,
+        "volatility": 0.06
+    },
+    "Meridian": {
+        "rating": 1270.72,
+        "rd": null,
+        "volatility": 0.06
+    },
+    "Zenith": {
+        "rating": 1256.41,
+        "rd": null,
+        "volatility": 0.06
+    },
+    "Proxima": {
+        "rating": 1141.11,
+        "rd": null,
+        "volatility": 0.06
+    },
+    "tencent/Hunyuan-A13B-Instruct": {
+        "rating": 1123.77,
+        "rd": null,
+        "volatility": 0.06
+    }
+}

@@ -96,6 +96,7 @@ def generate_leaderboard() -> List[Dict]:
         volatility = stats.get("volatility", 0.06)
 
         leaderboard.append({
+            "model_id": model_id, # 添加 model_id 以便稳定引用
             "model_name": display_name,
             "rating": round(rating), # 评分取整更美观
             "rating_deviation": round(rating_deviation), # RD也取整
