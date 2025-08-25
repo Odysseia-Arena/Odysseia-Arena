@@ -76,8 +76,7 @@ def transaction():
     except Exception as e:
         # 发生错误时自动回滚
         conn.rollback()
-        # 在生产环境中应记录日志
-        print(f"Database transaction failed: {e}")
+        logger.error(f"数据库事务执行失败: {e}", exc_info=True)
         raise
     finally:
         # 清理事务状态并关闭连接
@@ -98,7 +97,7 @@ def initialize_storage():
             CREATE TABLE IF NOT EXISTS models (
                 model_id TEXT PRIMARY KEY,
                 model_name TEXT NOT NULL,
-                rating INTEGER NOT NULL, -- 使用旧的定义以便于迁移
+                rating REAL NOT NULL,
                 battles INTEGER DEFAULT 0 NOT NULL,
                 wins INTEGER DEFAULT 0 NOT NULL,
                 ties INTEGER DEFAULT 0 NOT NULL,
@@ -113,23 +112,13 @@ def initialize_storage():
         columns = [row["name"] for row in cursor.fetchall()]
 
         if 'rating_deviation' not in columns:
-            print("数据库迁移：正在为 'models' 表添加 'rating_deviation' 字段...")
+            logger.info("数据库迁移：正在为 'models' 表添加 'rating_deviation' 字段...")
             cursor.execute(f"ALTER TABLE models ADD COLUMN rating_deviation REAL DEFAULT {config.GLICKO2_DEFAULT_RD} NOT NULL;")
         
         if 'volatility' not in columns:
-            print("数据库迁移：正在为 'models' 表添加 'volatility' 字段...")
+            logger.info("数据库迁移：正在为 'models' 表添加 'volatility' 字段...")
             cursor.execute(f"ALTER TABLE models ADD COLUMN volatility REAL DEFAULT {config.GLICKO2_DEFAULT_VOL} NOT NULL;")
         
-        # 检查并修改 rating 字段的类型，以存储浮点数
-        # PRAGMA table_info 在不同 SQLite 版本中返回的类型大小写可能不同
-        rating_column_info = next((col for col in cursor.execute("PRAGMA table_info(models)").fetchall() if col['name'] == 'rating'), None)
-        if rating_column_info and rating_column_info['type'].upper() == 'INTEGER':
-             print("数据库迁移：正在将 'rating' 字段的默认值更新为 1500.0...")
-             # SQLite 类型较为灵活，通常不需要显式修改类型。但我们可以更新新模型的默认值逻辑。
-             # 此处主要确保新插入的模型获得正确的浮点数评分。
-             # `sync_models_with_db` 中的逻辑已经处理了这一点。
-             pass
-
         # 2. 创建对战记录表 (battles)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS battles (
@@ -230,7 +219,7 @@ def sync_models_with_db(conn: Optional[sqlite3.Connection] = None):
                     ))
             
             if models_to_insert:
-                cursor.executemany("INSERT INTO models (model_id, model_name, rating) VALUES (?, ?, ?)", models_to_insert)
+                cursor.executemany("INSERT INTO models (model_id, model_name, rating, rating_deviation, volatility, tier) VALUES (?, ?, ?, ?, ?, ?)", models_to_insert)
                 logger.info(f"数据库同步：新增了 {len(models_to_insert)} 个模型: {[m[0] for m in models_to_insert]}")
 
         # 4. 更新现有模型的名称 (实现名称热更新)
@@ -255,12 +244,6 @@ def sync_models_with_db(conn: Optional[sqlite3.Connection] = None):
 
 def save_battle_record(battle_id: str, record: Dict):
     """保存新的对战记录"""
-    # 为了兼容旧代码，将model_a/b重命名为model_a/b_id
-    if 'model_a' in record:
-        record['model_a_id'] = record.pop('model_a')
-    if 'model_b' in record:
-        record['model_b_id'] = record.pop('model_b')
-
     with db_access() as conn:
         conn.execute("""
             INSERT INTO battles (
@@ -283,7 +266,6 @@ def get_battle_record(battle_id: str) -> Dict | None:
         cursor = conn.execute("SELECT * FROM battles WHERE battle_id = ?", (battle_id,))
         record = cursor.fetchone()
         if record:
-            # 将 sqlite3.Row 转换为普通字典以保持兼容性
             return dict(record)
         return None
 
@@ -292,7 +274,6 @@ def update_battle_record(battle_id: str, updates: Dict):
     if not updates:
         return True
 
-    # 动态构建 SQL 语句
     set_clause = ", ".join([f"{key} = ?" for key in updates.keys()])
     values = list(updates.values())
     values.append(battle_id)
@@ -382,7 +363,6 @@ def get_model_scores() -> Dict[str, Dict]:
         for row in cursor.fetchall():
             model_id = row["model_id"]
             stats = dict(row)
-            # dict(row) 会自动包含所有列，包括新增的 tier
             if "model_id" in stats:
                  del stats["model_id"]
             scores[model_id] = stats
@@ -424,22 +404,15 @@ def get_and_clear_pending_matches() -> List[Dict]:
         cursor = conn.cursor()
         cursor.execute("SELECT model_a_id, model_b_id, outcome FROM pending_matches")
         matches = [dict(row) for row in cursor.fetchall()]
-        # 使用 DELETE 而不是 TRUNCATE，因为它在事务中更安全
         cursor.execute("DELETE FROM pending_matches")
         return matches
 
 # --- 投票记录管理 ---
 
-# !! 移除低效的 get_voting_history() !!
-# 旧的 storage.py 中存在 get_voting_history()，它会加载所有记录到内存中。
-# 我们将其移除，并替换为更高效的查询函数。
-
-# !! 新增优化函数 !!
 def get_recent_votes(time_window: float) -> List[Dict]:
     """获取最近指定时间窗口内的投票记录 (用于替代 get_voting_history)"""
     cutoff_time = time.time() - time_window
     with db_access() as conn:
-        # 利用 timestamp DESC 索引进行高效查询
         cursor = conn.execute(
             "SELECT * FROM voting_history WHERE timestamp > ? ORDER BY timestamp DESC",
             (cutoff_time,)
@@ -463,25 +436,20 @@ def save_vote_record(record: Dict):
 
 def get_fixed_prompt_responses() -> Dict[str, Dict[str, str]]:
     """加载固定提示词的高质量响应缓存（只读）"""
-    # 这个文件通常是静态的，不需要迁移到SQLite
     try:
         if not os.path.exists(FIXED_PROMPT_RESPONSES_FILE):
             return {}
         with open(FIXED_PROMPT_RESPONSES_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
     except json.JSONDecodeError:
-        print(f"警告: 无法解析JSON文件 {FIXED_PROMPT_RESPONSES_FILE}。")
+        logger.warning(f"无法解析JSON文件 {FIXED_PROMPT_RESPONSES_FILE}。")
         return {}
-
-# --- 排行榜缓存管理 (已弃用) ---
-# 注意：排行榜现在直接从数据库读取，不再使用缓存机制
 
 # --- 统计信息 ---
 
 def get_total_users_count() -> int:
     """获取已记录的唯一用户总数"""
     with db_access() as conn:
-        # discord_id 可能为空，所以我们需要筛选非空值
         cursor = conn.execute("SELECT COUNT(DISTINCT discord_id) FROM battles WHERE discord_id IS NOT NULL")
         count = cursor.fetchone()[0]
         return count if count is not None else 0

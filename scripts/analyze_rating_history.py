@@ -10,8 +10,8 @@ from typing import Dict, List, Any
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, project_root)
 
-from src import glicko2
-from src.config import DATA_DIR
+from src import glicko2_impl as glicko2
+from src.config import DATA_DIR, GLICKO2_DEFAULT_RATING, GLICKO2_DEFAULT_RD, GLICKO2_DEFAULT_VOL, GLICKO2_TAU
 
 # --- 数据库文件路径 ---
 DATABASE_FILE = os.path.join(DATA_DIR, "arena.db")
@@ -42,10 +42,13 @@ def analyze_and_plot():
 
     print(f"找到了 {len(battles)} 条已完成的对战记录，正在处理...")
 
-    # 存储每个模型当前的 Glicko-2 参数
-    model_params: Dict[str, Dict[str, Any]] = {}
-    # 存储每次评分变动的记录: [{'timestamp': ..., 'model_id': ..., 'rating': ...}]
+    # 存储每个模型当前的 Glicko-2 Rating 对象
+    model_ratings: Dict[str, glicko2.Rating] = {}
+    # 存储每次评分变动的记录
     history_records = []
+    
+    # 初始化 Glicko-2 环境
+    env = glicko2.Glicko2(tau=GLICKO2_TAU, mu=GLICKO2_DEFAULT_RATING, phi=GLICKO2_DEFAULT_RD, sigma=GLICKO2_DEFAULT_VOL)
 
     # 模拟评分过程
     for i, battle in enumerate(battles):
@@ -54,33 +57,24 @@ def analyze_and_plot():
         model_b_id = battle['model_b_id']
         winner = battle['winner']
 
-        # 获取或初始化模型参数
-        params_a = model_params.get(model_a_id, {'rating': 1500.0, 'rd': 350.0, 'vol': 0.06})
-        params_b = model_params.get(model_b_id, {'rating': 1500.0, 'rd': 350.0, 'vol': 0.06})
-
-        player_a = glicko2.Player(rating=params_a['rating'], rd=params_a['rd'], vol=params_a['vol'])
-        player_b = glicko2.Player(rating=params_b['rating'], rd=params_b['rd'], vol=params_b['vol'])
+        # 获取或创建 Rating 对象
+        rating_a = model_ratings.get(model_a_id, env.create_rating())
+        rating_b = model_ratings.get(model_b_id, env.create_rating())
 
         # 确定比赛结果
         if winner == "model_a":
-            outcome_a, outcome_b = 1.0, 0.0
+            new_rating_a, new_rating_b = env.rate_1vs1(rating_a, rating_b)
         elif winner == "model_b":
-            outcome_a, outcome_b = 0.0, 1.0
-        else:
-            outcome_a, outcome_b = 0.5, 0.5
+            new_rating_b, new_rating_a = env.rate_1vs1(rating_b, rating_a)
+        else: # tie
+            new_rating_a, new_rating_b = env.rate_1vs1(rating_a, rating_b, drawn=True)
         
-        # 更新评分
-        player_a.update_player([params_b['rating']], [params_b['rd']], [outcome_a])
-        player_b.update_player([params_a['rating']], [params_a['rd']], [outcome_b])
-
-        # 保存更新后的参数和历史记录
-        new_params_a = {'rating': player_a.getRating(), 'rd': player_a.getRd(), 'vol': player_a.vol}
-        new_params_b = {'rating': player_b.getRating(), 'rd': player_b.getRd(), 'vol': player_b.vol}
-        model_params[model_a_id] = new_params_a
-        model_params[model_b_id] = new_params_b
+        # 保存更新后的 Rating 对象和历史记录
+        model_ratings[model_a_id] = new_rating_a
+        model_ratings[model_b_id] = new_rating_b
         
-        history_records.append({'timestamp': timestamp, 'model_id': model_a_id, 'rating': new_params_a['rating']})
-        history_records.append({'timestamp': timestamp, 'model_id': model_b_id, 'rating': new_params_b['rating']})
+        history_records.append({'timestamp': timestamp, 'model_id': model_a_id, 'rating': new_rating_a.mu})
+        history_records.append({'timestamp': timestamp, 'model_id': model_b_id, 'rating': new_rating_b.mu})
             
         if (i + 1) % 100 == 0:
             print(f"已处理 {i + 1}/{len(battles)} 场比赛...")

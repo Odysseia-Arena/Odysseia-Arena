@@ -7,6 +7,7 @@ from typing import Dict, Tuple, List
 from . import config
 from . import storage
 from . import model_client
+from .logger_config import logger
 
 class RateLimitError(Exception):
     """当用户超出速率限制时抛出。"""
@@ -96,7 +97,7 @@ def select_models_for_battle(tier: str) -> Tuple[dict, dict]:
 
     # 1. 根据概率和等级选择主目标池
     if use_transition_zone and len(transition_zone_models) >= 2:
-        print(f"[{time.ctime()}] 触发概率，为 {tier} 对战选择过渡区模型。")
+        logger.info(f"触发概率，为 {tier} 对战选择过渡区模型。")
         target_pool = transition_zone_models
     elif tier == 'high_tier':
         target_pool = high_tier_models
@@ -105,15 +106,15 @@ def select_models_for_battle(tier: str) -> Tuple[dict, dict]:
 
     # 2. 如果主目标池模型数量不足，则使用备用池
     if len(target_pool) < 2:
-        print(f"[{time.ctime()}] 主目标池模型不足，尝试使用备用池。")
+        logger.info(f"主目标池模型不足 (数量: {len(target_pool)})，尝试使用备用池。")
         if len(transition_zone_models) >= 2:
-            print(f"[{time.ctime()}] 使用过渡区作为备用池。")
+            logger.info("使用过渡区作为备用池。")
             target_pool = transition_zone_models
         elif tier == 'high_tier' and len(low_tier_models) >= 2:
-            print(f"[{time.ctime()}] 高端局备用池使用低端模型。")
+            logger.info("高端局备用池使用低端模型。")
             target_pool = low_tier_models
         elif tier == 'low_tier' and len(high_tier_models) >= 2:
-            print(f"[{time.ctime()}] 低端局备用池使用高端模型。")
+            logger.info("低端局备用池使用高端模型。")
             target_pool = high_tier_models
         else:
             # 如果所有池都少于2个模型，将所有可用模型合并作为最后手段
@@ -121,7 +122,7 @@ def select_models_for_battle(tier: str) -> Tuple[dict, dict]:
             if len(all_models) < 2:
                 raise ValueError("活动模型总数少于两个，无法开始对战。")
             target_pool = all_models
-            print(f"[{time.ctime()}] 所有分池均不足，使用全部活动模型作为最后备选。")
+            logger.warning("所有分池均不足，使用全部活动模型作为最后备选。")
 
 
     # 3. 使用加权随机抽样从最终的目标池中选择两个不同的模型
@@ -203,11 +204,11 @@ async def create_battle(battle_type: str, custom_prompt: str = None, discord_id:
         storage.delete_battle_record(battle_id)
         
         if max_retries > 0:
-            print(f"创建对战失败，将重试... ({max_retries} 次剩余)")
+            logger.warning(f"创建对战失败，将重试... ({max_retries} 次剩余)", exc_info=True)
             await asyncio.sleep(1)  # 短暂延迟后重试
             return await create_battle(battle_type, custom_prompt, discord_id, max_retries - 1)
         else:
-            print("创建对战失败，已达到最大重试次数。")
+            logger.error("创建对战失败，已达到最大重试次数。", exc_info=True)
             raise e
 
 def unstuck_battle(discord_id: str) -> bool:

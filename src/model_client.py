@@ -104,7 +104,7 @@ def call_model(model: dict, prompt: str) -> str:
             else:
                 print(f"警告: 模型 {model_id} 返回空响应 (尝试 {attempt + 1}/{MAX_RETRIES})")
                 if attempt < MAX_RETRIES - 1:
-                    pass
+                    time.sleep(RETRY_DELAY)
                 else:
                     raise ValueError(f"模型 {model_id} 在 {MAX_RETRIES} 次尝试后仍返回空响应")
 

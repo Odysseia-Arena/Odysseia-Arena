@@ -22,10 +22,11 @@ def promote_and_relegate_models():
         # 使用事务确保数据一致性
         with storage.transaction():
             all_scores = storage.get_model_scores()
-            
+            config_models = {m['id'] for m in config.get_models()}
+
             active_models = {
-                model_id: stats for model_id, stats in all_scores.items() 
-                if stats.get("is_active", 1)
+                model_id: stats for model_id, stats in all_scores.items()
+                if stats.get("is_active", 1) and model_id in config_models
             }
 
             if not active_models:

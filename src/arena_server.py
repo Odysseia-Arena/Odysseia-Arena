@@ -10,7 +10,7 @@ from . import config
 from . import storage
 from . import battle_controller
 from . import vote_controller
-from . import glicko2_rating as elo_rating
+from . import glicko2_rating
 from .battle_controller import RateLimitError
 from . import battle_cleaner
 from .logger_config import log_event, log_error, logger
@@ -236,7 +236,7 @@ async def get_leaderboard():
     try:
         start_time = time.time()
         # 这一步会自动处理缓存逻辑
-        leaderboard = elo_rating.generate_leaderboard()
+        leaderboard = glicko2_rating.generate_leaderboard()
         duration = time.time() - start_time
         # 记录性能指标（可选）
         log_event("LEADERBOARD_REQUEST", {"duration_ms": round(duration * 1000, 2)})
