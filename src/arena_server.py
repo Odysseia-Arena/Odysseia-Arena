@@ -10,11 +10,12 @@ from . import config
 from . import storage
 from . import battle_controller
 from . import vote_controller
-from . import elo_rating
+from . import glicko2_rating as elo_rating
 from .battle_controller import RateLimitError
 from . import battle_cleaner
 from .logger_config import log_event, log_error, logger
 from . import file_watcher
+from . import rating_updater
 from . import tier_manager
 
 # 初始化FastAPI应用
@@ -75,6 +76,9 @@ async def startup_event():
 
     # 启动配置文件热更新监控
     file_watcher.start_file_watcher()
+
+    # 启动周期性评分更新任务
+    rating_updater.start_rating_updater()
 
 # --- Pydantic模型定义（用于请求体验证和响应结构） ---
 

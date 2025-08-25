@@ -87,19 +87,18 @@ def transaction():
 # --- 初始化和辅助函数 ---
 
 def initialize_storage():
-    """初始化数据库和表结构"""
+    """初始化数据库和表结构，并处理必要的迁移"""
     os.makedirs(config.DATA_DIR, exist_ok=True)
 
-    # 使用 transaction 来初始化数据库
     with transaction() as conn:
         cursor = conn.cursor()
         
-        # 1. 模型评分表 (models) - 新增 tier 字段
+        # 1. 创建模型评分表 (models) 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS models (
                 model_id TEXT PRIMARY KEY,
                 model_name TEXT NOT NULL,
-                rating INTEGER NOT NULL,
+                rating INTEGER NOT NULL, -- 使用旧的定义以便于迁移
                 battles INTEGER DEFAULT 0 NOT NULL,
                 wins INTEGER DEFAULT 0 NOT NULL,
                 ties INTEGER DEFAULT 0 NOT NULL,
@@ -108,7 +107,30 @@ def initialize_storage():
             );
         """)
 
-        # 2. 对战记录表 (battles)
+        # --- 数据库迁移逻辑 ---
+        # 检查并添加 Glicko-2 所需的字段，以兼容旧数据库
+        cursor.execute("PRAGMA table_info(models)")
+        columns = [row["name"] for row in cursor.fetchall()]
+
+        if 'rating_deviation' not in columns:
+            print("数据库迁移：正在为 'models' 表添加 'rating_deviation' 字段...")
+            cursor.execute(f"ALTER TABLE models ADD COLUMN rating_deviation REAL DEFAULT {config.GLICKO2_DEFAULT_RD} NOT NULL;")
+        
+        if 'volatility' not in columns:
+            print("数据库迁移：正在为 'models' 表添加 'volatility' 字段...")
+            cursor.execute(f"ALTER TABLE models ADD COLUMN volatility REAL DEFAULT {config.GLICKO2_DEFAULT_VOL} NOT NULL;")
+        
+        # 检查并修改 rating 字段的类型，以存储浮点数
+        # PRAGMA table_info 在不同 SQLite 版本中返回的类型大小写可能不同
+        rating_column_info = next((col for col in cursor.execute("PRAGMA table_info(models)").fetchall() if col['name'] == 'rating'), None)
+        if rating_column_info and rating_column_info['type'].upper() == 'INTEGER':
+             print("数据库迁移：正在将 'rating' 字段的默认值更新为 1500.0...")
+             # SQLite 类型较为灵活，通常不需要显式修改类型。但我们可以更新新模型的默认值逻辑。
+             # 此处主要确保新插入的模型获得正确的浮点数评分。
+             # `sync_models_with_db` 中的逻辑已经处理了这一点。
+             pass
+
+        # 2. 创建对战记录表 (battles)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS battles (
                 battle_id TEXT PRIMARY KEY,
@@ -143,6 +165,17 @@ def initialize_storage():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_voting_history_timestamp_desc ON voting_history (timestamp DESC);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_voting_history_user_hash ON voting_history (user_hash);")
 
+        # 4. 待处理比赛表 (pending_matches) - 用于周期性评分更新
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pending_matches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                model_a_id TEXT NOT NULL,
+                model_b_id TEXT NOT NULL,
+                outcome REAL NOT NULL, -- 1.0 for A win, 0.5 for tie, 0.0 for B win
+                timestamp REAL NOT NULL
+            );
+        """)
+
         # --- 模型数据同步 ---
         sync_models_with_db(conn)
 
@@ -166,17 +199,38 @@ def sync_models_with_db(conn: Optional[sqlite3.Connection] = None):
         # 3. 插入新模型
         new_model_ids = current_model_ids - existing_model_ids
         if new_model_ids:
+            initial_scores = config.get_initial_scores()
             models_to_insert = []
             for model_obj in current_models:
                 if model_obj['id'] in new_model_ids:
-                    # 新模型默认等级为 'low'
-                    models_to_insert.append((model_obj['id'], model_obj['name'], config.DEFAULT_ELO_RATING, 'low'))
+                    model_id = model_obj['id']
+                    preset_scores = initial_scores.get(model_id)
+                    
+                    if preset_scores:
+                        # 如果在 model_scores.json 中找到预设值
+                        rating = preset_scores.get("rating", config.GLICKO2_DEFAULT_RATING)
+                        # 如果 rd 为 null 或未提供，则使用默认值
+                        rd = preset_scores.get("rd")
+                        if rd is None:
+                            rd = config.GLICKO2_DEFAULT_RD
+                        volatility = preset_scores.get("volatility", config.GLICKO2_DEFAULT_VOL)
+                    else:
+                        # 否则，使用全局默认值
+                        rating = config.GLICKO2_DEFAULT_RATING
+                        rd = config.GLICKO2_DEFAULT_RD
+                        volatility = config.GLICKO2_DEFAULT_VOL
+
+                    models_to_insert.append((
+                        model_id,
+                        model_obj['name'],
+                        rating,
+                        rd,
+                        volatility,
+                        'low'
+                    ))
             
             if models_to_insert:
-                cursor.executemany(
-                    "INSERT INTO models (model_id, model_name, rating, tier) VALUES (?, ?, ?, ?)", 
-                    models_to_insert
-                )
+                cursor.executemany("INSERT INTO models (model_id, model_name, rating) VALUES (?, ?, ?)", models_to_insert)
                 logger.info(f"数据库同步：新增了 {len(models_to_insert)} 个模型: {[m[0] for m in models_to_insert]}")
 
         # 4. 更新现有模型的名称 (实现名称热更新)
@@ -341,16 +395,38 @@ def save_model_scores(scores: Dict[str, Dict]):
     data_to_update = []
     for model_id, stats in scores.items():
         data_to_update.append((
-            stats["model_name"], stats["rating"], stats["battles"],
+            stats["model_name"], stats["rating"], stats.get("rating_deviation", config.GLICKO2_DEFAULT_RD),
+            stats.get("volatility", config.GLICKO2_DEFAULT_VOL), stats["battles"],
             stats["wins"], stats.get("ties", 0), model_id
         ))
 
     with db_access() as conn:
         conn.executemany("""
             UPDATE models SET
-            model_name = ?, rating = ?, battles = ?, wins = ?, ties = ?
+            model_name = ?, rating = ?, rating_deviation = ?, volatility = ?,
+            battles = ?, wins = ?, ties = ?
             WHERE model_id = ?
         """, data_to_update)
+
+# --- 待处理比赛管理 (用于周期性更新) ---
+
+def add_pending_match(model_a_id: str, model_b_id: str, outcome: float):
+    """添加一场待处理的比赛结果"""
+    with db_access() as conn:
+        conn.execute(
+            "INSERT INTO pending_matches (model_a_id, model_b_id, outcome, timestamp) VALUES (?, ?, ?, ?)",
+            (model_a_id, model_b_id, outcome, time.time())
+        )
+
+def get_and_clear_pending_matches() -> List[Dict]:
+    """原子性地获取并清空所有待处理的比赛"""
+    with transaction() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT model_a_id, model_b_id, outcome FROM pending_matches")
+        matches = [dict(row) for row in cursor.fetchall()]
+        # 使用 DELETE 而不是 TRUNCATE，因为它在事务中更安全
+        cursor.execute("DELETE FROM pending_matches")
+        return matches
 
 # --- 投票记录管理 ---
 

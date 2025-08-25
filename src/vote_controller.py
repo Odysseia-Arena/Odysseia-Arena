@@ -3,7 +3,7 @@ import time
 import hashlib
 from typing import Dict
 from . import storage
-from . import elo_rating
+from . import glicko2_rating
 from . import config
 
 # 1. 定义自定义异常以处理事务回滚控制流
@@ -68,10 +68,19 @@ def submit_vote(battle_id: str, vote_choice: str, discord_id: str) -> Dict:
             model_a_id = battle["model_a_id"]
             model_b_id = battle["model_b_id"]
 
-            # 5. 更新ELO评分
-            # elo_rating.process_battle_result 中的 RMW 操作现在是安全的，
-            # 因为它通过 threading.local 自动参与到了当前的事务中。
-            elo_rating.process_battle_result(model_a_id, model_b_id, winner)
+            # 5. 更新评分或将比赛加入待处理队列
+            if config.RATING_UPDATE_PERIOD_MINUTES == 0:
+                # 实时更新模式
+                glicko2_rating.process_battle_result(model_a_id, model_b_id, winner)
+            else:
+                # 周期性更新模式：将结果存入待处理表
+                if winner == "model_a":
+                    outcome = 1.0
+                elif winner == "model_b":
+                    outcome = 0.0
+                else: # tie
+                    outcome = 0.5
+                storage.add_pending_match(model_a_id, model_b_id, outcome)
 
             # 6. 更新对战记录状态为已完成
             updates = {

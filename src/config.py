@@ -12,12 +12,25 @@ load_dotenv() # 加载 .env 文件
 CONFIG_DIR = "config"
 MODELS_FILE = os.path.join(CONFIG_DIR, "models.json")
 FIXED_PROMPTS_FILE = os.path.join(CONFIG_DIR, "fixed_prompts.json")
+MODEL_SCORES_FILE = os.path.join(CONFIG_DIR, "model_scores.json") # 新增文件路径
 DATA_DIR = "data"
 FIXED_PROMPT_RESPONSES_FILE = os.path.join(DATA_DIR, "fixed_prompt_responses.json")
 
-# --- ELO评分系统配置 ---
-DEFAULT_ELO_RATING = 1200
-K_FACTOR = 16
+# --- Glicko-2 评分系统配置 ---
+# --- Glicko-2 评分周期配置 ---
+# 定义评分更新的周期（分钟）。
+# 设置为 0 表示实时更新（每场比赛后立即更新）。
+# 设置为大于 0 的值（例如 60）表示每 60 分钟批量更新一次周期内的所有比赛评分。
+RATING_UPDATE_PERIOD_MINUTES = int(os.getenv("RATING_UPDATE_PERIOD_MINUTES", 0))
+
+# Glicko-2 系统常量 (tau)，用于约束波动性随时间的变化。较小的值可防止波动性剧烈变化。
+GLICKO2_TAU = 0.5
+# 新模型的初始评分 (rating / mu)
+GLICKO2_DEFAULT_RATING = 1500.0
+# 新模型的初始评分偏差 (rating_deviation / phi)
+GLICKO2_DEFAULT_RD = 350.0
+# 新模型的初始波动性 (volatility / sigma)
+GLICKO2_DEFAULT_VOL = 0.06
 
 # --- 投票与对战速率限制 ---
 VOTE_TIME_WINDOW = 30 * 60 # 30分钟内不能重复投票
@@ -27,7 +40,7 @@ MIN_BATTLE_INTERVAL = int(os.getenv("MIN_BATTLE_INTERVAL", 30))
 ENABLE_SERIAL_BATTLE_LIMIT = os.getenv("ENABLE_SERIAL_BATTLE_LIMIT", "False").lower() in ('true', '1', 't')
 
 # --- 对战清理配置 ---
-GENERATION_TIMEOUT = 30 * 60      # 30分钟生成超时
+GENERATION_TIMEOUT = 12 * 60      # 12分钟生成超时
 
 # --- 等级与升降级系统配置 ---
 PROMOTION_RELEGATION_COUNT = 3      # 每日升降级模型的数量
@@ -108,9 +121,29 @@ def _load_prompts_from_file(file_path: str) -> List[str]:
         logger.error(f"读取提示词文件 {file_path} 时发生未知错误: {e}")
         return []
 
+def _load_initial_scores_from_file(file_path: str) -> Dict:
+    """从文件加载初始模型评分"""
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        logger.warning(f"警告: 找不到初始评分文件 {file_path}，将为所有新模型使用默认值。")
+        return {}
+    except json.JSONDecodeError:
+        logger.error(f"错误: 无法解析 {file_path}")
+        return {}
+    except Exception as e:
+        logger.error(f"读取初始评分文件 {file_path} 时发生未知错误: {e}")
+        return {}
+
 # 初始化热更新配置
 _models_config = HotReloadConfig(MODELS_FILE, _load_models_from_file)
 _prompts_config = HotReloadConfig(FIXED_PROMPTS_FILE, _load_prompts_from_file)
+_initial_scores_config = HotReloadConfig(MODEL_SCORES_FILE, _load_initial_scores_from_file)
+
+def get_initial_scores() -> Dict:
+    """获取初始模型评分（支持热更新）"""
+    return _initial_scores_config.get_data()
 
 def get_models() -> List[Dict]:
     """获取当前可用的模型列表（支持热更新）"""
