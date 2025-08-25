@@ -5,8 +5,8 @@ import json
 import os
 import sys
 from typing import Dict, List
-from . import config
-from .model_client import call_model
+from src.utils import config
+from src.models.model_client import call_model
 
 def load_test_responses() -> Dict[str, Dict[str, str]]:
     """加载测试用的响应数据"""

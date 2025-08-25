@@ -5,9 +5,11 @@ import sqlite3
 import json
 from collections import defaultdict
 
-# 将src目录添加到Python路径，以便导入config和storage
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
-from src import config
+# 将项目根目录添加到Python路径
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.insert(0, project_root)
+
+from src.utils import config
 
 DATABASE_FILE = os.path.join(config.DATA_DIR, "arena.db")
 MODELS_CONFIG_FILE = config.MODELS_FILE
@@ -95,10 +97,11 @@ def fix_foreign_key_issues():
             total_battles = sum(m['battles'] for m in models_to_process)
             total_wins = sum(m['wins'] for m in models_to_process)
             total_ties = sum(m['ties'] for m in models_to_process)
+            total_skips = sum(m.get('skips', 0) for m in models_to_process)
             weighted_rating_sum = sum(m['rating'] * m['battles'] for m in models_to_process if m['battles'] > 0)
             total_rating_battles = sum(m['battles'] for m in models_to_process if m['battles'] > 0)
             avg_rating = round(weighted_rating_sum / total_rating_battles) if total_rating_battles > 0 else config.DEFAULT_ELO_RATING
-            print(f"  - 合并后统计: Battles={total_battles}, Wins={total_wins}, Ties={total_ties}, AvgRating={avg_rating}")
+            print(f"  - 合并后统计: Battles={total_battles}, Wins={total_wins}, Ties={total_ties}, Skips={total_skips}, AvgRating={avg_rating}")
 
             # 3. 删除所有源记录 (非权威ID的记录)
             if source_ids:
@@ -111,16 +114,16 @@ def fix_foreign_key_issues():
             if cursor.fetchone():
                 # 更新现有的权威记录
                 cursor.execute("""
-                    UPDATE models SET model_name = ?, rating = ?, battles = ?, wins = ?, ties = ?, is_active = 1
+                    UPDATE models SET model_name = ?, rating = ?, battles = ?, wins = ?, ties = ?, skips = ?, is_active = 1
                     WHERE model_id = ?
-                """, (model_name, avg_rating, total_battles, total_wins, total_ties, authoritative_id))
+                """, (model_name, avg_rating, total_battles, total_wins, total_ties, total_skips, authoritative_id))
                 print(f"  - 已更新现有的权威记录 '{authoritative_id}'。")
             else:
                 # 插入新的权威记录
                 cursor.execute("""
-                    INSERT INTO models (model_id, model_name, rating, battles, wins, ties, is_active)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (authoritative_id, model_name, avg_rating, total_battles, total_wins, total_ties, 1))
+                    INSERT INTO models (model_id, model_name, rating, battles, wins, ties, skips, is_active)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (authoritative_id, model_name, avg_rating, total_battles, total_wins, total_ties, total_skips, 1))
                 print(f"  - 权威记录 '{authoritative_id}' 不存在，已插入新记录。")
 
         conn.commit()

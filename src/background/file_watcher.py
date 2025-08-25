@@ -4,9 +4,9 @@ import os
 from threading import Thread
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
-from . import config
-from . import storage
-from .logger_config import logger
+from src.utils import config
+from src.data import storage
+from src.utils.logger_config import logger
 
 class ConfigChangeHandler(FileSystemEventHandler):
     """处理配置文件更改的事件处理器"""

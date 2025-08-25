@@ -28,6 +28,7 @@
 {
     "battle_id": "fe99a00f-96f1-4990-a856-3d7bd9ceaacf",
     "prompt": "写一首关于春天的诗",
+    "prompt_theme": "poetry",
     "response_a": "春风拂面暖如絮...",
     "response_b": "万物复苏春意浓...",
     "status": "pending_vote"
@@ -63,7 +64,7 @@
 **请求体**:
 ```json
 {
-    "vote_choice": "model_a",  // 可选值: "model_a", "model_b", "tie"
+    "vote_choice": "model_a",  // 可选值: "model_a", "model_b", "tie", "skip"
     "discord_id": "123456789"  // Discord用户ID（必需）
 }
 ```
@@ -74,6 +75,17 @@
     "status": "success",
     "message": "投票成功提交。",
     "winner": "gpt-4.1",
+    "model_a_name": "gpt-4.1",
+    "model_b_name": "gemini-2.5-flash"
+}
+```
+
+**响应示例（跳过）**:
+```json
+{
+    "status": "success",
+    "message": "投票成功提交。",
+    "winner": "Skipped",
     "model_a_name": "gpt-4.1",
     "model_b_name": "gemini-2.5-flash"
 }
@@ -100,7 +112,7 @@
 ### 3. 获取排行榜
 **端点**: `GET /leaderboard`
 
-**描述**: 获取所有模型的当前排名和统计信息。
+**描述**: 获取所有模型的当前排名和统计信息，以及周期性评分的更新时间。
 
 **响应示例**:
 ```json
@@ -109,35 +121,50 @@
         {
             "rank": 1,
             "model_name": "gpt-4.1",
+            "tier": "high",
             "rating": 1550,
             "rating_deviation": 85,
             "volatility": 0.059,
             "battles": 15,
             "wins": 10,
             "ties": 3,
-            "win_rate_percentage": 75.0
+            "skips": 2,
+            "win_rate_percentage": 75.0,
+            "rating_realtime": 1552,
+            "rating_deviation_realtime": 84,
+            "volatility_realtime": 0.0591
         },
         {
             "rank": 2,
             "model_name": "gemini-2.5-pro",
+            "tier": "low",
             "rating": 1520,
             "rating_deviation": 92,
             "volatility": 0.06,
             "battles": 12,
             "wins": 7,
             "ties": 2,
-            "win_rate_percentage": 66.67
+            "skips": 3,
+            "win_rate_percentage": 66.67,
+            "rating_realtime": 1518,
+            "rating_deviation_realtime": 91,
+            "volatility_realtime": 0.0602
         }
-    ]
+    ],
+    "next_update_time": "2025-08-25T17:00:00"
 }
 ```
 
 **说明**:
-- **评分系统**: 使用 Glicko-2 评分系统。
-  - `rating`: 模型评分（初始值 1500）。
-  - `rating_deviation` (RD): 评分偏差。值越低，表示我们对该模型的评分越确定。
-  - `volatility`: 波动性。衡量模型评分不稳定程度的指标。
-- **胜率计算**: `(wins + 0.5 * ties) / battles * 100`，平局算作半场胜利。
+- `next_update_time`: 预计的下一次周期性评分更新的ISO 8601格式时间戳（通常是下一个整点）。
+- **投票选项**:
+  - `skip`: 选择跳过。该场对战不计入模型评分，但会计入总对战场次和跳过次数。
+- **评分系统**: 使用两种Glicko-2评分。
+  - `tier`: 模型当前所属等级 (`high` 或 `low`)。
+  - `rating`, `rating_deviation`, `volatility`: **周期性更新**的评分。这是排行榜排名的主要依据。
+  - `rating_realtime`, `rating_deviation_realtime`, `volatility_realtime`: **实时更新**的评分。该评分在每次对战后立即更新，可用于展示即时趋势。
+  - `skips`: 模型被跳过的次数。
+- **胜率计算**: `(wins + 0.5 * ties) / (battles - skips) * 100`，平局算作半场胜利，跳过的对战不计入有效场次。
 
 ### 4. 获取对战详情
 **端点**: `GET /battle/{battle_id}`
@@ -152,6 +179,7 @@
 {
     "battle_id": "fe99a00f-96f1-4990-a856-3d7bd9ceaacf",
     "prompt": "写一首关于春天的诗",
+    "prompt_theme": "poetry",
     "response_a": "春风拂面暖如絮...",
     "response_b": "万物复苏春意浓...",
     "status": "pending_vote"
@@ -163,6 +191,7 @@
 {
     "battle_id": "fe99a00f-96f1-4990-a856-3d7bd9ceaacf",
     "prompt": "写一首关于春天的诗",
+    "prompt_theme": "poetry",
     "response_a": "春风拂面暖如絮...",
     "response_b": "万物复苏春意浓...",
     "status": "completed",
@@ -241,6 +270,7 @@
 {
     "battle_id": "fe99a00f-96f1-4990-a856-3d7bd9ceaacf",
     "prompt": "写一首关于春天的诗",
+    "prompt_theme": "poetry",
     "response_a": "春风拂面暖如絮...",
     "response_b": "万物复苏春意浓..."
 }
@@ -288,3 +318,99 @@
     "message": "没有找到需要清除的对战。"
 }
 ```
+### 8. 获取对战统计矩阵
+**端点**: `GET /api/battle_statistics`
+
+**描述**: 获取所有模型之间的详细对战统计数据，包括1v1胜率矩阵和总对战场次矩阵。
+
+**响应示例**:
+```json
+{
+    "win_rate_matrix": {
+        "Model A": {
+            "Model B": 0.6,
+            "Model C": 0.75
+        },
+        "Model B": {
+            "Model A": 0.4,
+            "Model C": 0.55
+        },
+        "Model C": {
+            "Model A": 0.25,
+            "Model B": 0.45
+        }
+    },
+    "match_count_matrix": {
+        "Model A": {
+            "Model B": 10,
+            "Model C": 8
+        },
+        "Model B": {
+            "Model A": 10,
+            "Model C": 11
+        },
+        "Model C": {
+            "Model A": 8,
+            "Model B": 11
+        }
+    }
+}
+```
+
+**说明**:
+- **`win_rate_matrix`**:
+  - `win_rate_matrix["Model A"]["Model B"]` 的值表示在所有非平局的对战中，模型A战胜模型B的概率。
+  - 这是一个非对称矩阵，即 `win_rate_matrix["Model A"]["Model B"]` + `win_rate_matrix["Model B"]["Model A"]` = 1。
+  - 如果两个模型之间没有非平局的对战，对应的值将为 `null`。
+- **`match_count_matrix`**:
+  - `match_count_matrix["Model A"]["Model B"]` 的值表示模型A和模型B之间进行的总对战场次（包括平局）。
+  - 这是一个对称矩阵，即 `match_count_matrix["Model A"]["Model B"]` 等于 `match_count_matrix["Model B"]["Model A"]`。
+### 9. 获取提示词统计
+**端点**: `GET /api/prompt_statistics`
+
+**描述**: 获取基于每个提示词的详细对战统计信息，按总对战场次降序排列。
+
+**响应示例**:
+```json
+{
+    "prompt_statistics": [
+        {
+            "prompt": "写一首关于春天的诗",
+            "prompt_theme": "poetry",
+            "total_battles": 50,
+            "model_battle_counts": {
+                "Model A": 25,
+                "Model B": 25,
+                "Model C": 50
+            },
+            "model_win_rates": {
+                "Model A": 0.4,
+                "Model B": 0.3,
+                "Model C": 0.8
+            }
+        },
+        {
+            "prompt": "写一个关于太空旅行的短篇故事",
+            "prompt_theme": "scifi",
+            "total_battles": 42,
+            "model_battle_counts": {
+                "Model A": 42,
+                "Model D": 30,
+                "Model E": 12
+            },
+            "model_win_rates": {
+                "Model A": 0.9,
+                "Model D": 0.2,
+                "Model E": 0.1
+            }
+        }
+    ]
+}
+```
+
+**字段说明**:
+- `prompt`: 提示词原文。
+- `prompt_theme`: 提示词的主题。
+- `total_battles`: 在该提示词下进行的总对战场次。
+- `model_battle_counts`: 一个字典，key为模型名称，value为该模型在该提示词下的出场总次数。
+- `model_win_rates`: 一个字典，key为模型名称，value为该模型在该提示词下的胜率 (wins / battles)。

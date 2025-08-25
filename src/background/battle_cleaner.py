@@ -1,13 +1,14 @@
 # src/battle_cleaner.py
 import time
 import threading
-from . import storage
-from . import config
-from . import tier_manager
+from src.data import storage
+from src.utils import config
+from src.controllers import tier_manager
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 BATTLE_TIMEOUT_MINUTES = 30
 CLEANUP_INTERVAL_SECONDS = 300  # 5 minutes
-PROMOTION_RELEGATION_INTERVAL_SECONDS = 24 * 60 * 60  # 24 hours
 
 def cleanup_expired_battles():
     """
@@ -66,15 +67,15 @@ def run_battle_cleaner():
 
 def run_promotion_relegation_scheduler():
     """
-    启动一个后台线程，定期运行模型升降级任务。
+    启动一个后台调度器，在北京时间每天凌晨4点运行模型升降级任务。
     """
-    def task():
-        # 首次运行时先等待一小段时间，确保服务器完全启动
-        time.sleep(10)
-        while True:
-            tier_manager.promote_and_relegate_models()
-            time.sleep(PROMOTION_RELEGATION_INTERVAL_SECONDS)
-
-    scheduler_thread = threading.Thread(target=task, daemon=True)
-    scheduler_thread.start()
-    print("Promotion/relegation background task started.")
+    scheduler = BackgroundScheduler(timezone='Asia/Shanghai')
+    scheduler.add_job(
+        tier_manager.promote_and_relegate_models,
+        trigger=CronTrigger(hour=4, minute=0),
+        id='daily_promotion_relegation',
+        name='Daily Model Promotion and Relegation',
+        replace_existing=True
+    )
+    scheduler.start()
+    print("Promotion/relegation scheduler started, scheduled to run daily at 04:00 Shanghai time.")

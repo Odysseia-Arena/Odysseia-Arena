@@ -1,22 +1,25 @@
 # arena_server.py
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, HTTPException, Request, status, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List, Dict
 import time
+import datetime
 
 # 导入核心模块
-from . import config
-from . import storage
-from . import battle_controller
-from . import vote_controller
-from . import glicko2_rating
-from .battle_controller import RateLimitError
-from . import battle_cleaner
-from .logger_config import log_event, log_error, logger
-from . import file_watcher
-from . import rating_updater
-from . import tier_manager
+from src.utils import config
+from src.data import storage
+from src.controllers import battle_controller
+from src.controllers import vote_controller
+from src.rating import glicko2_rating
+from src.controllers.battle_controller import RateLimitError
+from src.background import battle_cleaner
+from src.utils.logger_config import log_event, log_error, logger
+from src.background import file_watcher
+from src.background import rating_updater
+from src.background import database_backup
+from src.controllers import tier_manager
+from src.services import statistics_calculator
 
 # 初始化FastAPI应用
 app = FastAPI(title="创意写作大模型竞技场后端", version="1.0.0")
@@ -80,6 +83,9 @@ async def startup_event():
     # 启动周期性评分更新任务
     rating_updater.start_rating_updater()
 
+    # 启动数据库每小时备份任务
+    database_backup.start_backup_scheduler()
+
 # --- Pydantic模型定义（用于请求体验证和响应结构） ---
 
 class BattleRequest(BaseModel):
@@ -118,6 +124,16 @@ async def create_battle(request_body: BattleRequest):
             custom_prompt=request_body.custom_prompt,
             discord_id=request_body.discord_id
         )
+        
+        # 如果 battle_details 为 None，说明对战在生成时被 unstuck 命令取消了
+        if battle_details is None:
+            log_event("BATTLE_CANCELLED_DURING_GENERATION", {"discord_id": request_body.discord_id})
+            # 返回 409 Conflict，并提供明确的错误信息
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="此对战已被取消"
+            )
+
         log_event("BATTLE_CREATED", {"battle_id": battle_details["battle_id"], "type": request_body.battle_type})
         return battle_details
     except RateLimitError as e:
@@ -158,6 +174,7 @@ async def get_battle_back(request_body: BattleBackRequest):
             return {
                 "battle_id": battle["battle_id"],
                 "prompt": battle["prompt"],
+                "prompt_theme": battle.get("prompt_theme", "general"),
                 "response_a": battle["response_a"],
                 "response_b": battle["response_b"],
             }
@@ -235,12 +252,22 @@ async def get_leaderboard():
     logger.info("Received request for /leaderboard")
     try:
         start_time = time.time()
-        # 这一步会自动处理缓存逻辑
+        
+        # 生成排行榜主体数据
         leaderboard = glicko2_rating.generate_leaderboard()
+        
+        # 计算下次更新时间
+        now = datetime.datetime.now()
+        next_update_dt = (now + datetime.timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+        next_update_iso = next_update_dt.isoformat()
+
         duration = time.time() - start_time
-        # 记录性能指标（可选）
         log_event("LEADERBOARD_REQUEST", {"duration_ms": round(duration * 1000, 2)})
-        return {"leaderboard": leaderboard}
+        
+        return {
+            "leaderboard": leaderboard,
+            "next_update_time": next_update_iso
+        }
     except Exception as e:
         logger.exception("生成排行榜时发生错误")
         log_error(f"生成排行榜时发生错误: {e}", {"step": "get_leaderboard"})
@@ -259,6 +286,7 @@ async def get_battle_details(battle_id: str):
         return {
             "battle_id": battle["battle_id"],
             "prompt": battle["prompt"],
+            "prompt_theme": battle.get("prompt_theme", "general"),
             "response_a": battle["response_a"],
             "response_b": battle["response_b"],
             "status": battle["status"]
@@ -275,6 +303,31 @@ async def get_battle_details(battle_id: str):
         battle["winner"] = "Tie"
         
     return battle
+
+# --- 新增的统计信息端点 ---
+@app.get("/api/battle_statistics")
+async def get_battle_statistics():
+    """获取模型对战的详细统计数据，包括胜率和对战场次。"""
+    logger.info("Received request for /api/battle_statistics")
+    try:
+        stats = statistics_calculator.get_battle_statistics()
+        return stats
+    except Exception as e:
+        logger.exception("生成对战统计数据时发生错误")
+        log_error(f"生成对战统计数据时发生错误: {e}", {"step": "get_battle_statistics"})
+        raise HTTPException(status_code=500, detail="无法生成对战统计数据。")
+
+@app.get("/api/prompt_statistics")
+async def get_prompt_statistics():
+    """获取基于每个提示词的详细对战统计。"""
+    logger.info("Received request for /api/prompt_statistics")
+    try:
+        stats = statistics_calculator.get_prompt_statistics()
+        return {"prompt_statistics": stats}
+    except Exception as e:
+        logger.exception("生成提示词统计数据时发生错误")
+        log_error(f"生成提示词统计数据时发生错误: {e}", {"step": "get_prompt_statistics"})
+        raise HTTPException(status_code=500, detail="无法生成提示词统计数据。")
 
 # 健康检查端点
 @app.get("/health")

@@ -4,14 +4,29 @@ const { REST, Routes, ApplicationCommandOptionType } = require('discord.js');
 const commands = [
   {
     name: 'battle',
-    description: '开始一场新的模型对战',
+    description: '发起一场高端局对战',
     // 默认不授予任何成员使用权限（在“集成 -> 你的机器人 -> 命令权限”里再授予指定用户/角色）
     // 禁止私信里使用
     dm_permission: false,
   },
   {
+    name: 'battlelow',
+    description: '发起一场低端局对战',
+    dm_permission: false,
+  },
+  {
     name: 'leaderboard',
-    description: '查看模型排行榜',
+    description: '查看模型总排行榜',
+    dm_permission: false,
+  },
+  {
+    name: 'leaderboardhigh',
+    description: '查看模型高端局排行榜',
+    dm_permission: false,
+  },
+  {
+    name: 'leaderboardlow',
+    description: '查看模型低端局排行榜',
     dm_permission: false,
   },
   {

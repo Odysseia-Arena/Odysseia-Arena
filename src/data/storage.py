@@ -7,8 +7,8 @@ import time
 from typing import Dict, List, Any, Optional, Tuple
 from contextlib import contextmanager
 from typing import Optional
-from . import config
-from .logger_config import logger
+from src.utils import config
+from src.utils.logger_config import logger
 
 # 定义数据存储路径
 DATABASE_FILE = os.path.join(config.DATA_DIR, "arena.db")
@@ -101,8 +101,9 @@ def initialize_storage():
                 battles INTEGER DEFAULT 0 NOT NULL,
                 wins INTEGER DEFAULT 0 NOT NULL,
                 ties INTEGER DEFAULT 0 NOT NULL,
+                skips INTEGER DEFAULT 0 NOT NULL,
                 is_active BOOLEAN DEFAULT 1 NOT NULL,
-                tier TEXT DEFAULT 'low' NOT NULL 
+                tier TEXT DEFAULT 'low' NOT NULL
             );
         """)
 
@@ -118,6 +119,25 @@ def initialize_storage():
         if 'volatility' not in columns:
             logger.info("数据库迁移：正在为 'models' 表添加 'volatility' 字段...")
             cursor.execute(f"ALTER TABLE models ADD COLUMN volatility REAL DEFAULT {config.GLICKO2_DEFAULT_VOL} NOT NULL;")
+
+        if 'tier' not in columns:
+            logger.info("数据库迁移：正在为 'models' 表添加 'tier' 字段...")
+            cursor.execute("ALTER TABLE models ADD COLUMN tier TEXT DEFAULT 'low' NOT NULL;")
+
+        if 'skips' not in columns:
+            logger.info("数据库迁移：正在为 'models' 表添加 'skips' 字段...")
+            cursor.execute("ALTER TABLE models ADD COLUMN skips INTEGER DEFAULT 0 NOT NULL;")
+
+        # 为实时评分添加新字段
+        if 'rating_realtime' not in columns:
+            logger.info("数据库迁移：正在为 'models' 表添加 'rating_realtime' 字段...")
+            cursor.execute("ALTER TABLE models ADD COLUMN rating_realtime REAL;")
+        if 'rating_deviation_realtime' not in columns:
+            logger.info("数据库迁移：正在为 'models' 表添加 'rating_deviation_realtime' 字段...")
+            cursor.execute("ALTER TABLE models ADD COLUMN rating_deviation_realtime REAL;")
+        if 'volatility_realtime' not in columns:
+            logger.info("数据库迁移：正在为 'models' 表添加 'volatility_realtime' 字段...")
+            cursor.execute("ALTER TABLE models ADD COLUMN volatility_realtime REAL;")
         
         # 2. 创建对战记录表 (battles)
         cursor.execute("""
@@ -138,6 +158,14 @@ def initialize_storage():
                 discord_id TEXT -- 添加 discord_id 字段
             );
         """)
+
+        # 迁移：为 battles 表添加 prompt_id 和 prompt_theme 字段
+        cursor.execute("PRAGMA table_info(battles)")
+        battle_columns = [row["name"] for row in cursor.fetchall()]
+        if 'prompt_id' not in battle_columns:
+            cursor.execute("ALTER TABLE battles ADD COLUMN prompt_id TEXT;")
+        if 'prompt_theme' not in battle_columns:
+            cursor.execute("ALTER TABLE battles ADD COLUMN prompt_theme TEXT;")
 
         # 3. 投票历史表 (voting_history)
         cursor.execute("""
@@ -215,11 +243,12 @@ def sync_models_with_db(conn: Optional[sqlite3.Connection] = None):
                         rating,
                         rd,
                         volatility,
-                        'low'
+                        'low',
+                        0
                     ))
             
             if models_to_insert:
-                cursor.executemany("INSERT INTO models (model_id, model_name, rating, rating_deviation, volatility, tier) VALUES (?, ?, ?, ?, ?, ?)", models_to_insert)
+                cursor.executemany("INSERT INTO models (model_id, model_name, rating, rating_deviation, volatility, tier, skips) VALUES (?, ?, ?, ?, ?, ?, ?)", models_to_insert)
                 logger.info(f"数据库同步：新增了 {len(models_to_insert)} 个模型: {[m[0] for m in models_to_insert]}")
 
         # 4. 更新现有模型的名称 (实现名称热更新)
@@ -247,12 +276,13 @@ def save_battle_record(battle_id: str, record: Dict):
     with db_access() as conn:
         conn.execute("""
             INSERT INTO battles (
-                battle_id, battle_type, prompt,
+                battle_id, battle_type, prompt_id, prompt_theme, prompt,
                 model_a_id, model_b_id, model_a_name, model_b_name,
                 response_a, response_b, status, winner, timestamp, created_at, discord_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            record["battle_id"], record.get("battle_type"), record.get("prompt"),
+            record["battle_id"], record.get("battle_type"), 
+            record.get("prompt_id"), record.get("prompt_theme"), record.get("prompt"),
             record.get("model_a_id"), record.get("model_b_id"),
             record.get("model_a_name"), record.get("model_b_name"),
             record.get("response_a"), record.get("response_b"),
@@ -374,17 +404,25 @@ def save_model_scores(scores: Dict[str, Dict]):
     """
     data_to_update = []
     for model_id, stats in scores.items():
+        # 为新字段提供默认值，以防它们在stats字典中不存在
+        rating_realtime = stats.get('rating_realtime', stats['rating'])
+        rd_realtime = stats.get('rating_deviation_realtime', stats.get('rating_deviation', config.GLICKO2_DEFAULT_RD))
+        vol_realtime = stats.get('volatility_realtime', stats.get('volatility', config.GLICKO2_DEFAULT_VOL))
+
         data_to_update.append((
             stats["model_name"], stats["rating"], stats.get("rating_deviation", config.GLICKO2_DEFAULT_RD),
             stats.get("volatility", config.GLICKO2_DEFAULT_VOL), stats["battles"],
-            stats["wins"], stats.get("ties", 0), model_id
+            stats["wins"], stats.get("ties", 0), stats.get("skips", 0),
+            rating_realtime, rd_realtime, vol_realtime,
+            model_id
         ))
 
     with db_access() as conn:
         conn.executemany("""
             UPDATE models SET
             model_name = ?, rating = ?, rating_deviation = ?, volatility = ?,
-            battles = ?, wins = ?, ties = ?
+            battles = ?, wins = ?, ties = ?, skips = ?,
+            rating_realtime = ?, rating_deviation_realtime = ?, volatility_realtime = ?
             WHERE model_id = ?
         """, data_to_update)
 

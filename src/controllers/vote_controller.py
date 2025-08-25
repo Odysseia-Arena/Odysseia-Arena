@@ -2,9 +2,9 @@
 import time
 import hashlib
 from typing import Dict
-from . import storage
-from . import glicko2_rating
-from . import config
+from src.data import storage
+from src.rating import glicko2_rating
+from src.utils import config
 
 # 1. 定义自定义异常以处理事务回滚控制流
 class VoteConflictError(Exception):
@@ -32,7 +32,7 @@ def submit_vote(battle_id: str, vote_choice: str, discord_id: str) -> Dict:
     """
     处理投票提交。现在是原子操作。
     """
-    if vote_choice not in ["model_a", "model_b", "tie"]:
+    if vote_choice not in ["model_a", "model_b", "tie", "skip"]:
         raise ValueError("无效的投票选项。")
 
     # 构建完整的user_id（带前缀）
@@ -68,19 +68,26 @@ def submit_vote(battle_id: str, vote_choice: str, discord_id: str) -> Dict:
             model_a_id = battle["model_a_id"]
             model_b_id = battle["model_b_id"]
 
-            # 5. 更新评分或将比赛加入待处理队列
+            # 5. 更新评分
+            # 5.1 总是更新实时评分
+            if winner != "skip":
+                glicko2_rating.process_battle_result(model_a_id, model_b_id, winner, is_realtime=True)
+
+            # 5.2 根据配置更新常规评分或加入待处理队列
             if config.RATING_UPDATE_PERIOD_MINUTES == 0:
-                # 实时更新模式
-                glicko2_rating.process_battle_result(model_a_id, model_b_id, winner)
+                # 实时更新模式（更新常规评分）
+                if winner != "skip":
+                    glicko2_rating.process_battle_result(model_a_id, model_b_id, winner, is_realtime=False)
             else:
                 # 周期性更新模式：将结果存入待处理表
-                if winner == "model_a":
-                    outcome = 1.0
-                elif winner == "model_b":
-                    outcome = 0.0
-                else: # tie
-                    outcome = 0.5
-                storage.add_pending_match(model_a_id, model_b_id, outcome)
+                if winner != "skip":
+                    if winner == "model_a":
+                        outcome = 1.0
+                    elif winner == "model_b":
+                        outcome = 0.0
+                    else: # tie
+                        outcome = 0.5
+                    storage.add_pending_match(model_a_id, model_b_id, outcome)
 
             # 6. 更新对战记录状态为已完成
             updates = {
@@ -114,8 +121,10 @@ def submit_vote(battle_id: str, vote_choice: str, discord_id: str) -> Dict:
         winner_name = model_a_name
     elif winner == "model_b":
         winner_name = model_b_name
-    else:
+    elif winner == "tie":
         winner_name = "Tie"
+    else: # skip
+        winner_name = "Skipped"
 
     return {
         "status": "success",

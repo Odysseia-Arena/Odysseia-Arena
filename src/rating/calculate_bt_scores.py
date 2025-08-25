@@ -1,4 +1,5 @@
 import json
+import os
 import math
 import numpy as np
 import pandas as pd
@@ -10,29 +11,11 @@ from scipy.optimize import minimize
 
 # --- 1. 设置与导入 (Setup and Imports) ---
 
-# 检查必需的 Python 库
-try:
-    import numpy
-    import pandas
-    import scipy
-except ImportError as e:
-    print(f"缺少必需的 Python 库。请安装它们:", file=sys.stderr)
-    print("pip install numpy pandas scipy", file=sys.stderr)
-    sys.exit(1)
+# 将项目根目录添加到Python路径中
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.insert(0, project_root)
 
-# 导入提供的 storage 模块 (storage.py 负责数据库交互)
-try:
-    # 假设 storage.py 及其依赖项 (config.py, logger_config.py) 可用
-    import src.storage as storage
-except ImportError as e:
-    print(f"错误: 无法导入 storage.py 或其依赖项。", file=sys.stderr)
-    print(f"详情: {e}", file=sys.stderr)
-    print("请确保 storage.py, config.py, 和 logger_config.py 在 Python 路径中。", file=sys.stderr)
-    sys.exit(1)
-except Exception as e:
-    # 捕获 storage 模块初始化期间的潜在错误 (例如配置问题)
-    print(f"storage 模块初始化期间出错: {e}", file=sys.stderr)
-    sys.exit(1)
+from src.data import storage
 
 # --- 2. 配置 (Configuration) ---
 
@@ -63,7 +46,7 @@ def fetch_completed_battles() -> pd.DataFrame:
             model_b_id,
             winner
         FROM battles
-        WHERE status = 'completed'
+        WHERE status = 'completed' AND winner != 'skip'
     """
     try:
         # 使用 storage.py 提供的 db_access 上下文管理器

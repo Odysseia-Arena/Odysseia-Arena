@@ -1,8 +1,8 @@
 # tier_manager.py
 import time
-from . import storage
-from . import config
-from .logger_config import logger
+from src.data import storage
+from src.utils import config
+from src.utils.logger_config import logger
 from typing import List, Tuple
 
 def promote_and_relegate_models():

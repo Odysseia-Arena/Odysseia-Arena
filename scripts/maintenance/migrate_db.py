@@ -12,9 +12,10 @@ import os
 import sys
 
 # 将项目根目录添加到Python路径中
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.insert(0, project_root)
 
-from src import storage
+from src.data import storage
 
 def add_is_active_to_models():
     """

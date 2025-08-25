@@ -67,9 +67,177 @@ client.on('interactionCreate', async (interaction) => {
   }
 });
 
+async function sendPaginatedLeaderboard(interaction, leaderboard, title) {
+  const ITEMS_PER_PAGE = 10;
+  let currentPage = 0;
+  const totalPages = Math.ceil(leaderboard.length / ITEMS_PER_PAGE);
+
+  const generateEmbed = (page) => {
+    const start = page * ITEMS_PER_PAGE;
+    const end = start + ITEMS_PER_PAGE;
+    const pagedItems = leaderboard.slice(start, end);
+
+    let description = '';
+    pagedItems.forEach((model, index) => {
+      const rank = interaction.commandName === 'leaderboard' ? model.rank : start + index + 1;
+      description += `**${rank}. ${model.model_name}**\n`;
+      description += `> **评分:** ${model.rating} (评分偏差: ${model.rating_deviation}, 波动率: ${model.volatility.toFixed(3)})\n`;
+      description += `> **胜率:** ${model.win_rate_percentage.toFixed(2)}%\n`;
+      description += `> **对战:** ${model.battles} (胜: ${model.wins}, 平: ${model.ties}, 跳过: ${model.skips})\n\n`;
+    });
+
+    return new EmbedBuilder()
+      .setColor(0xFFD700)
+      .setTitle(title)
+      .setDescription(description)
+      .setFooter({ text: `第 ${page + 1} / ${totalPages} 页` })
+      .setTimestamp();
+  };
+
+  const generateButtons = (page) => {
+    return new ActionRowBuilder()
+      .addComponents(
+        new ButtonBuilder()
+          .setCustomId('leaderboard_prev')
+          .setLabel('⬅️ 上一页')
+          .setStyle(ButtonStyle.Primary)
+          .setDisabled(page === 0),
+        new ButtonBuilder()
+          .setCustomId('leaderboard_next')
+          .setLabel('下一页 ➡️')
+          .setStyle(ButtonStyle.Primary)
+          .setDisabled(page === totalPages - 1)
+      );
+  };
+
+  const embed = generateEmbed(currentPage);
+  const row = generateButtons(currentPage);
+
+  const message = await interaction.editReply({
+    embeds: [embed],
+    components: totalPages > 1 ? [row] : [],
+  });
+
+  if (totalPages <= 1) return;
+
+  const collector = message.createMessageComponentCollector({
+    filter: i => i.user.id === interaction.user.id && (i.customId === 'leaderboard_prev' || i.customId === 'leaderboard_next'),
+    time: 5 * 60 * 1000, // 5 分钟
+  });
+
+  collector.on('collect', async i => {
+    if (i.customId === 'leaderboard_prev') {
+      currentPage--;
+    } else if (i.customId === 'leaderboard_next') {
+      currentPage++;
+    }
+
+    const newEmbed = generateEmbed(currentPage);
+    const newRow = generateButtons(currentPage);
+
+    await i.update({ embeds: [newEmbed], components: [newRow] });
+  });
+
+  collector.on('end', () => {
+    const disabledRow = new ActionRowBuilder()
+      .addComponents(
+        ButtonBuilder.from(row.components[0]).setDisabled(true),
+        ButtonBuilder.from(row.components[1]).setDisabled(true)
+      );
+    interaction.editReply({ components: [disabledRow] }).catch(console.error);
+  });
+}
+async function sendPaginatedLeaderboard(interaction, leaderboard, title, nextUpdateTime) {
+  const ITEMS_PER_PAGE = 10;
+  let currentPage = 0;
+  const totalPages = Math.ceil(leaderboard.length / ITEMS_PER_PAGE);
+
+  const generateEmbed = (page) => {
+    const start = page * ITEMS_PER_PAGE;
+    const end = start + ITEMS_PER_PAGE;
+    const pagedItems = leaderboard.slice(start, end);
+
+    let description = '';
+    pagedItems.forEach((model, index) => {
+      const rank = interaction.commandName === 'leaderboard' ? model.rank : start + index + 1;
+      const ratingDiff = model.rating_realtime - model.rating;
+      const ratingSymbol = ratingDiff > 0 ? '🔼' : (ratingDiff < 0 ? '🔽' : '');
+      
+      description += `**${rank}. ${model.model_name}**\n`;
+      description += `> **评分:** ${model.rating} -> **${model.rating_realtime}** ${ratingSymbol}\n`;
+      description += `> **(评分偏差:** ${model.rating_deviation} -> **${model.rating_deviation_realtime}** / **波动率:** ${model.volatility.toFixed(3)} -> **${model.volatility_realtime.toFixed(3)}**)\n`;
+      description += `> **胜率:** ${model.win_rate_percentage.toFixed(2)}%\n`;
+      description += `> **对战:** ${model.battles} (胜: ${model.wins}, 平: ${model.ties}, 跳过: ${model.skips})\n\n`;
+    });
+
+    const nextUpdate = new Date(nextUpdateTime);
+    const footerText = `第 ${page + 1} / ${totalPages} 页 | 周期性评分将于 ${nextUpdate.toLocaleTimeString('zh-CN')} 更新`;
+
+    return new EmbedBuilder()
+      .setColor(0xFFD700)
+      .setTitle(title)
+      .setDescription(description)
+      .setFooter({ text: footerText })
+      .setTimestamp();
+  };
+
+  const generateButtons = (page) => {
+    return new ActionRowBuilder()
+      .addComponents(
+        new ButtonBuilder()
+          .setCustomId('leaderboard_prev')
+          .setLabel('⬅️ 上一页')
+          .setStyle(ButtonStyle.Primary)
+          .setDisabled(page === 0),
+        new ButtonBuilder()
+          .setCustomId('leaderboard_next')
+          .setLabel('下一页 ➡️')
+          .setStyle(ButtonStyle.Primary)
+          .setDisabled(page === totalPages - 1)
+      );
+  };
+
+  const embed = generateEmbed(currentPage);
+  const row = generateButtons(currentPage);
+
+  const message = await interaction.editReply({
+    embeds: [embed],
+    components: totalPages > 1 ? [row] : [],
+  });
+
+  if (totalPages <= 1) return;
+
+  const collector = message.createMessageComponentCollector({
+    filter: i => i.user.id === interaction.user.id && (i.customId === 'leaderboard_prev' || i.customId === 'leaderboard_next'),
+    time: 5 * 60 * 1000, // 5 分钟
+  });
+
+  collector.on('collect', async i => {
+    if (i.customId === 'leaderboard_prev') {
+      currentPage--;
+    } else if (i.customId === 'leaderboard_next') {
+      currentPage++;
+    }
+
+    const newEmbed = generateEmbed(currentPage);
+    const newRow = generateButtons(currentPage);
+
+    await i.update({ embeds: [newEmbed], components: [newRow] });
+  });
+
+  collector.on('end', () => {
+    const disabledRow = new ActionRowBuilder()
+      .addComponents(
+        ButtonBuilder.from(row.components[0]).setDisabled(true),
+        ButtonBuilder.from(row.components[1]).setDisabled(true)
+      );
+    interaction.editReply({ components: [disabledRow] }).catch(console.error);
+  });
+}
+
 async function handleCommand(interaction) {
   console.log(`[Command] Received command: ${interaction.commandName} from user ${interaction.user.id} in channel ${interaction.channelId}`);
-  if (interaction.commandName === 'battle') {
+  if (interaction.commandName === 'battle' || interaction.commandName === 'battlelow') {
     // 用户/角色白名单检查
     if (!isMemberAllowed(interaction)) {
       console.log(`[Auth] User ${interaction.user.id} failed member check.`);
@@ -104,8 +272,9 @@ async function handleCommand(interaction) {
         flags: 'Ephemeral'
       });
 
+      const battleType = interaction.commandName === 'battle' ? 'high_tier' : 'low_tier';
       const payload = {
-        battle_type: 'fixed',
+        battle_type: battleType,
         discord_id: interaction.user.id,
       };
       console.log(`[API] Sending POST request to ${API_URL}/battle with payload:`, JSON.stringify(payload, null, 2));
@@ -127,8 +296,9 @@ async function handleCommand(interaction) {
         .setFooter({ text: `对战 ID: ${battle.battle_id}\n状态: 等待投票` });
 
       // --- 使用 Description 字段智能展示 ---
+      const themeText = battle.prompt_theme ? `**主题：** ${battle.prompt_theme}\n\n` : '';
       const quotedPrompt = battle.prompt.split('\n').map(line => `> ${line}`).join('\n');
-      const baseText = `用户提示词：\n${quotedPrompt}\n\n`; 
+      const baseText = `${themeText}用户提示词：\n${quotedPrompt}\n\n`;
       let templateA = `**模型 A 的回答**\n\`\`\`\n%content%\n\`\`\`\n`;
       let templateB = `**模型 B 的回答**\n\`\`\`\n%content%\n\`\`\``;
       
@@ -229,6 +399,10 @@ async function handleCommand(interaction) {
           new ButtonBuilder()
             .setCustomId(`vote:${battle.battle_id}:tie`)
             .setLabel('🤝 平局')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId(`vote:${battle.battle_id}:skip`)
+            .setLabel('⏭️ 跳过')
             .setStyle(ButtonStyle.Secondary)
         );
       
@@ -278,7 +452,8 @@ async function handleCommand(interaction) {
         }
 
         // 将两条消息合并为一条，直接编辑原始消息
-        await interaction.editReply({ content: finalMessage, components: [] });
+        const finalMessageWithMention = `<@${interaction.user.id}> ${finalMessage}`;
+        await interaction.editReply({ content: finalMessageWithMention, components: [] });
         return;
       }
 
@@ -286,11 +461,12 @@ async function handleCommand(interaction) {
       const detail = error?.response?.data?.detail || error?.response?.data?.message || error?.message || '未知错误';
       // 移除拼接的句号，让后端决定是否包含标点
       const errorMessage = `创建对战失败：${String(detail)}。请稍后再试。`.replace('。。', '。');
+      const errorMessageWithMention = `<@${interaction.user.id}> ${errorMessage}`;
 
       // 编辑初始的 "创建中..." 消息来显示错误
-      await interaction.editReply({ content: errorMessage, components: [] });
+      await interaction.editReply({ content: errorMessageWithMention, components: [] });
     }
-  } else if (interaction.commandName === 'leaderboard') {
+  } else if (['leaderboard', 'leaderboardhigh', 'leaderboardlow'].includes(interaction.commandName)) {
     // 频道白名单检查
     if (!isChannelAllowed(interaction.channelId)) {
       const tips = ALLOWED_CHANNEL_IDS.size
@@ -304,43 +480,35 @@ async function handleCommand(interaction) {
       return;
     }
     try {
-        // 需求变更：所有命令响应仅发起人可见
-        await interaction.deferReply({ flags: 'Ephemeral' });
-        const url = `${API_URL}/leaderboard`;
-        console.log(`[API] Sending GET request to ${url}`);
-        const response = await axios.get(url);
-        const { leaderboard } = response.data;
+      await interaction.deferReply({ flags: 'Ephemeral' });
+      const url = `${API_URL}/leaderboard`;
+      console.log(`[API] Sending GET request to ${url}`);
+      const response = await axios.get(url);
+      let { leaderboard, next_update_time } = response.data;
 
-        if (!leaderboard || leaderboard.length === 0) {
-            await interaction.editReply({ content: '排行榜当前为空。' });
-            return;
-        }
+      let title = '🏆 模型总排行榜';
+      if (interaction.commandName === 'leaderboardhigh') {
+        title = '🏆 模型高端局排行榜';
+        leaderboard = leaderboard.filter(m => m.tier === 'high');
+      } else if (interaction.commandName === 'leaderboardlow') {
+        title = '🏆 模型低端局排行榜';
+        leaderboard = leaderboard.filter(m => m.tier === 'low');
+      }
 
-        const embed = new EmbedBuilder()
-            .setColor(0xFFD700)
-            .setTitle('🏆 模型排行榜')
-            .setTimestamp();
+      if (!leaderboard || leaderboard.length === 0) {
+        await interaction.editReply({ content: '该分段排行榜当前为空。' });
+        return;
+      }
 
-        let description = '';
-        leaderboard.forEach(model => {
-            description += `**${model.rank}. ${model.model_name}**\n`;
-            description += `> **评分:** ${model.rating}\n`;
-            description += `> **胜率:** ${model.win_rate_percentage.toFixed(2)}%\n`;
-            description += `> **对战数:** ${model.battles} (胜: ${model.wins}, 平: ${model.ties})\n\n`;
-        });
-
-        embed.setDescription(description);
-
-        // 需求变更：所有命令响应仅发起人可见
-        await interaction.editReply({ embeds: [embed] });
+      await sendPaginatedLeaderboard(interaction, leaderboard, title, next_update_time);
 
     } catch (error) {
-        console.error('获取排行榜时出错:', error);
-        if (!interaction.replied && !interaction.deferred) {
-            await interaction.reply({ content: '获取排行榜失败，请稍后再试。', flags: 'Ephemeral' });
-        } else {
-            await interaction.editReply({ content: '获取排行榜失败，请稍后再试。' });
-        }
+      console.error('获取排行榜时出错:', error);
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({ content: '获取排行榜失败，请稍后再试。', flags: 'Ephemeral' });
+      } else {
+        await interaction.editReply({ content: '获取排行榜失败，请稍后再试。' });
+      }
     }
   } else if (interaction.commandName === 'battleinfo') {
     // 频道白名单检查
@@ -388,8 +556,9 @@ async function handleCommand(interaction) {
         .setFooter({ text: `对战 ID: ${data.battle_id}\n状态: ${statusDisplay}` });
 
       // --- 复用 /battle 命令的智能截断和展示逻辑 ---
+      const themeText = data.prompt_theme ? `**主题：** ${data.prompt_theme}\n\n` : '';
       const quotedPrompt = data.prompt.split('\n').map(line => `> ${line}`).join('\n');
-      const baseText = `**提示词:**\n${quotedPrompt}\n\n`;
+      const baseText = `${themeText}**提示词:**\n${quotedPrompt}\n\n`;
       let templateA = `**模型 A 的回答**\n\`\`\`\n%content%\n\`\`\`\n`;
       let templateB = `**模型 B 的回答**\n\`\`\`\n%content%\n\`\`\``;
 
@@ -477,6 +646,8 @@ async function handleCommand(interaction) {
           winnerText = '模型 B';
         } else if (data.winner === 'Tie') {
           winnerText = '平局';
+        } else if (data.winner === 'Skipped') {
+          winnerText = '跳过';
         } else if (data.winner) {
           winnerText = data.winner;
         }
@@ -591,8 +762,9 @@ async function handleCommand(interaction) {
           .setTitle('⚔️ 召回对战成功！')
           .setFooter({ text: `对战 ID: ${battle.battle_id}\n状态: ${statusDisplay}` });
 
+        const themeText = battle.prompt_theme ? `**主题：** ${battle.prompt_theme}\n\n` : '';
         const quotedPrompt = battle.prompt.split('\n').map(line => `> ${line}`).join('\n');
-        const baseText = `**提示词:**\n${quotedPrompt}\n\n`;
+        const baseText = `${themeText}**提示词:**\n${quotedPrompt}\n\n`;
         let templateA = `**模型 A 的回答**\n\`\`\`\n%content%\n\`\`\`\n`;
         let templateB = `**模型 B 的回答**\n\`\`\`\n%content%\n\`\`\``;
 
@@ -649,7 +821,8 @@ async function handleCommand(interaction) {
             .addComponents(
               new ButtonBuilder().setCustomId(`vote:${battle.battle_id}:model_a`).setLabel('👍 投给模型 A').setStyle(ButtonStyle.Primary),
               new ButtonBuilder().setCustomId(`vote:${battle.battle_id}:model_b`).setLabel('👍 投给模型 B').setStyle(ButtonStyle.Primary),
-              new ButtonBuilder().setCustomId(`vote:${battle.battle_id}:tie`).setLabel('🤝 平局').setStyle(ButtonStyle.Secondary)
+              new ButtonBuilder().setCustomId(`vote:${battle.battle_id}:tie`).setLabel('🤝 平局').setStyle(ButtonStyle.Secondary),
+              new ButtonBuilder().setCustomId(`vote:${battle.battle_id}:skip`).setLabel('⏭️ 跳过').setStyle(ButtonStyle.Secondary)
             );
           components.push(voteButtons);
         } else if (statusRaw === 'completed') {
@@ -657,6 +830,7 @@ async function handleCommand(interaction) {
             if (battle.winner === 'model_a') winnerText = '模型 A';
             else if (battle.winner === 'model_b') winnerText = '模型 B';
             else if (battle.winner === 'Tie') winnerText = '平局';
+            else if (battle.winner === 'Skipped') winnerText = '跳过';
             else if (battle.winner) winnerText = battle.winner;
             embed.addFields(
               { name: '模型 A 名称', value: battle.model_a || 'N/A', inline: true },
@@ -704,6 +878,7 @@ async function handleCommand(interaction) {
 }
 
 async function handleButton(interaction) {
+  if (interaction.customId.startsWith('leaderboard_')) return;
   const [action, battleId, choice] = interaction.customId.split(':');
 
   if (action === 'view_full') {
@@ -817,6 +992,8 @@ async function handleVoteButton(interaction, battleId, choice) {
         winnerText = '模型 B';
       } else if (voteResult.winner === 'Tie') {
         winnerText = '平局';
+      } else if (voteResult.winner === 'Skipped') {
+        winnerText = '跳过';
       } else if (voteResult.winner) {
         winnerText = voteResult.winner;
       }

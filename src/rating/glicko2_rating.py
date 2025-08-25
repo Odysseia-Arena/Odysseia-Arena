@@ -1,9 +1,9 @@
 # glicko2_rating.py
 from typing import Dict, List
 from collections import defaultdict
-from . import storage
-from . import config
-from . import glicko2_impl as glicko2 # 使用新的核心实现
+from src.data import storage
+from src.utils import config
+from src.rating import glicko2_impl as glicko2 # 使用新的核心实现
 
 # --- 全局 Glicko2 环境 ---
 # 初始化一个Glicko2环境实例，使用config中的参数
@@ -15,9 +15,10 @@ GLICKO2_ENV = glicko2.Glicko2(
     sigma=config.GLICKO2_DEFAULT_VOL
 )
 
-def process_battle_result(model_a_id: str, model_b_id: str, winner: str):
+def process_battle_result(model_a_id: str, model_b_id: str, winner: str, is_realtime: bool = False):
     """
-    处理单场对战结果（实时更新模式）。
+    处理单场对战结果。
+    :param is_realtime: 如果为True，则更新实时评分字段，否则更新常规评分字段。
     """
     scores = storage.get_model_scores()
 
@@ -25,40 +26,60 @@ def process_battle_result(model_a_id: str, model_b_id: str, winner: str):
         print(f"错误: 尝试更新评分时找不到模型 {model_a_id} 或 {model_b_id}")
         return
 
-    # 1. 为对战双方创建 Rating 对象 (执行名称转换)
+    # 根据模式确定要读写的字段名
+    rating_field = 'rating_realtime' if is_realtime else 'rating'
+    rd_field = 'rating_deviation_realtime' if is_realtime else 'rating_deviation'
+    vol_field = 'volatility_realtime' if is_realtime else 'volatility'
+
+    # 确保实时评分的字段存在
+    for model_id in [model_a_id, model_b_id]:
+        if rating_field not in scores[model_id]:
+            scores[model_id][rating_field] = scores[model_id]['rating']
+            scores[model_id][rd_field] = scores[model_id]['rating_deviation']
+            scores[model_id][vol_field] = scores[model_id]['volatility']
+
+    # 1. 为对战双方创建 Rating 对象
     model_a_stats = scores[model_a_id]
-    rating_a = glicko2.Rating(mu=model_a_stats['rating'], phi=model_a_stats['rating_deviation'], sigma=model_a_stats['volatility'])
+    mu_a = model_a_stats.get(rating_field) if model_a_stats.get(rating_field) is not None else model_a_stats['rating']
+    phi_a = model_a_stats.get(rd_field) if model_a_stats.get(rd_field) is not None else model_a_stats['rating_deviation']
+    sigma_a = model_a_stats.get(vol_field) if model_a_stats.get(vol_field) is not None else model_a_stats['volatility']
+    rating_a = glicko2.Rating(mu=mu_a, phi=phi_a, sigma=sigma_a)
 
     model_b_stats = scores[model_b_id]
-    rating_b = glicko2.Rating(mu=model_b_stats['rating'], phi=model_b_stats['rating_deviation'], sigma=model_b_stats['volatility'])
+    mu_b = model_b_stats.get(rating_field) if model_b_stats.get(rating_field) is not None else model_b_stats['rating']
+    phi_b = model_b_stats.get(rd_field) if model_b_stats.get(rd_field) is not None else model_b_stats['rating_deviation']
+    sigma_b = model_b_stats.get(vol_field) if model_b_stats.get(vol_field) is not None else model_b_stats['volatility']
+    rating_b = glicko2.Rating(mu=mu_b, phi=phi_b, sigma=sigma_b)
 
     # 2. 确定比赛结果并调用 rate_1vs1
     if winner == "model_a":
         new_rating_a, new_rating_b = GLICKO2_ENV.rate_1vs1(rating_a, rating_b, drawn=False)
     elif winner == "model_b":
-        # 注意：rate_1vs1的第二个返回值总是输家
         new_rating_b, new_rating_a = GLICKO2_ENV.rate_1vs1(rating_b, rating_a, drawn=False)
     else:  # tie
         new_rating_a, new_rating_b = GLICKO2_ENV.rate_1vs1(rating_a, rating_b, drawn=True)
 
-    # 3. 更新 scores 字典 (执行名称转换)
+    # 3. 更新 scores 字典
     scores[model_a_id].update({
-        'rating': new_rating_a.mu,
-        'rating_deviation': new_rating_a.phi,
-        'volatility': new_rating_a.sigma,
+        rating_field: new_rating_a.mu,
+        rd_field: new_rating_a.phi,
+        vol_field: new_rating_a.sigma,
     })
-    scores[model_a_id]['battles'] += 1
-    if winner == "model_a": scores[model_a_id]['wins'] += 1
-    elif winner == "tie": scores[model_a_id]['ties'] = scores[model_a_id].get('ties', 0) + 1
+    # 只有在非实时更新（即主周期更新）时才更新统计数据，避免重复计算
+    if not is_realtime:
+        scores[model_a_id]['battles'] += 1
+        if winner == "model_a": scores[model_a_id]['wins'] += 1
+        elif winner == "tie": scores[model_a_id]['ties'] = scores[model_a_id].get('ties', 0) + 1
 
     scores[model_b_id].update({
-        'rating': new_rating_b.mu,
-        'rating_deviation': new_rating_b.phi,
-        'volatility': new_rating_b.sigma,
+        rating_field: new_rating_b.mu,
+        rd_field: new_rating_b.phi,
+        vol_field: new_rating_b.sigma,
     })
-    scores[model_b_id]['battles'] += 1
-    if winner == "model_b": scores[model_b_id]['wins'] += 1
-    elif winner == "tie": scores[model_b_id]['ties'] = scores[model_b_id].get('ties', 0) + 1
+    if not is_realtime:
+        scores[model_b_id]['battles'] += 1
+        if winner == "model_b": scores[model_b_id]['wins'] += 1
+        elif winner == "tie": scores[model_b_id]['ties'] = scores[model_b_id].get('ties', 0) + 1
 
     # 4. 保存回数据库
     storage.save_model_scores(scores)
@@ -102,14 +123,21 @@ def run_rating_update():
         
         updated_ratings[model_id] = new_rating
 
-    # 3. 将更新后的分数合并回主分数表并保存 (执行名称转换)
+    # 3. 将更新后的分数合并回主分数表
     for model_id, new_rating in updated_ratings.items():
         scores[model_id].update({
             'rating': new_rating.mu,
             'rating_deviation': new_rating.phi,
             'volatility': new_rating.sigma,
         })
-    
+
+    # 4. [新增] 将更新后的周期性评分同步到实时评分，为新周期建立基线
+    for model_id in updated_ratings.keys():
+        scores[model_id]['rating_realtime'] = scores[model_id]['rating']
+        scores[model_id]['rating_deviation_realtime'] = scores[model_id]['rating_deviation']
+        scores[model_id]['volatility_realtime'] = scores[model_id]['volatility']
+
+    # 5. 保存回数据库
     storage.save_model_scores(scores)
 
 
@@ -131,21 +159,34 @@ def generate_leaderboard() -> List[Dict]:
         battles = stats["battles"]
         wins = stats["wins"]
         ties = stats.get("ties", 0)
+        skips = stats.get("skips", 0)
         
-        win_rate = ((wins + 0.5 * ties) / battles * 100) if battles > 0 else 0
+        effective_battles = battles - skips
+        win_rate = ((wins + 0.5 * ties) / effective_battles * 100) if effective_battles > 0 else 0
+
+        # 获取实时评分数据，如果值为None或键不存在，则使用常规评分数据作为默认值
+        rating_realtime = stats.get("rating_realtime") if stats.get("rating_realtime") is not None else rating
+        rating_deviation_realtime = stats.get("rating_deviation_realtime") if stats.get("rating_deviation_realtime") is not None else rating_deviation
+        volatility_realtime = stats.get("volatility_realtime") if stats.get("volatility_realtime") is not None else volatility
 
         leaderboard.append({
             "model_id": model_id,
             "model_name": display_name,
+            "tier": stats.get("tier", "low"),
             "rating": round(rating),
             "rating_deviation": round(rating_deviation),
             "volatility": round(volatility, 4),
             "battles": battles,
             "wins": wins,
             "ties": ties,
-            "win_rate_percentage": round(win_rate, 2)
+            "skips": skips,
+            "win_rate_percentage": round(win_rate, 2),
+            "rating_realtime": round(rating_realtime),
+            "rating_deviation_realtime": round(rating_deviation_realtime),
+            "volatility_realtime": round(volatility_realtime, 4)
         })
 
+    # 仍然按常规评分进行排名
     leaderboard.sort(key=lambda x: x["rating"], reverse=True)
 
     for i, entry in enumerate(leaderboard):
