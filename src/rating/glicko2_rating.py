@@ -170,12 +170,11 @@ def generate_leaderboard() -> List[Dict]:
         volatility_realtime = stats.get("volatility_realtime") if stats.get("volatility_realtime") is not None else volatility
 
         leaderboard.append({
-            "model_id": model_id,
             "model_name": display_name,
             "tier": stats.get("tier", "low"),
             "rating": round(rating),
             "rating_deviation": round(rating_deviation),
-            "volatility": round(volatility, 4),
+            "volatility": volatility,
             "battles": battles,
             "wins": wins,
             "ties": ties,
@@ -183,7 +182,7 @@ def generate_leaderboard() -> List[Dict]:
             "win_rate_percentage": round(win_rate, 2),
             "rating_realtime": round(rating_realtime),
             "rating_deviation_realtime": round(rating_deviation_realtime),
-            "volatility_realtime": round(volatility_realtime, 4)
+            "volatility_realtime": volatility_realtime
         })
 
     # 仍然按常规评分进行排名

@@ -314,11 +314,20 @@ def update_battle_record(battle_id: str, updates: Dict):
         cursor = conn.execute(f"UPDATE battles SET {set_clause} WHERE battle_id = ?", values)
         return cursor.rowcount > 0
 
-def delete_battle_record(battle_id: str):
+def delete_battle_record(battle_id: str) -> bool:
     """删除指定的对战记录"""
     with db_access() as conn:
         cursor = conn.execute("DELETE FROM battles WHERE battle_id = ?", (battle_id,))
         return cursor.rowcount > 0
+
+def delete_pending_battles_by_discord_id(discord_id: str) -> int:
+    """删除指定用户所有卡在“生成中”(pending_generation)状态的对战，并返回删除的数量"""
+    with db_access() as conn:
+        cursor = conn.execute(
+            "DELETE FROM battles WHERE discord_id = ? AND status = 'pending_generation'",
+            (discord_id,)
+        )
+        return cursor.rowcount
 
 def get_pending_battles_before(timestamp: float) -> List[Dict]:
     """获取在指定时间戳之前创建的、状态为 pending_vote 的对战记录"""
@@ -356,6 +365,16 @@ def has_pending_battle(discord_id: str) -> bool:
             (discord_id,)
         )
         return cursor.fetchone() is not None
+
+def get_pending_battle_count(discord_id: str) -> int:
+    """获取用户正在进行的对战数量"""
+    with db_access() as conn:
+        cursor = conn.execute(
+            "SELECT COUNT(*) FROM battles WHERE discord_id = ? AND (status = 'pending_generation' OR status = 'pending_vote')",
+            (discord_id,)
+        )
+        count = cursor.fetchone()[0]
+        return count if count is not None else 0
 
 def get_latest_battle_by_discord_id(discord_id: str) -> Optional[Dict]:
     """获取指定用户最新的一条对战记录"""

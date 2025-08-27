@@ -125,3 +125,70 @@ def get_prompt_statistics():
         })
 
     return results
+
+def get_all_models_stats():
+    """
+    通过单次高效的SQL查询，计算并返回所有模型的全局统计数据（总对战数、胜场、平局）。
+    """
+    conn = storage._connect()
+    try:
+        # 这是一个复杂的查询，它将 battles 表进行两次非枢轴转换（一次用于模型A，一次用于模型B），
+        # 然后将结果合并，最后按模型名称进行分组和聚合。
+        query = """
+        SELECT
+            model_name,
+            COUNT(*) AS total_battles,
+            SUM(CASE WHEN is_win = 1 THEN 1 ELSE 0 END) AS total_wins,
+            SUM(CASE WHEN is_tie = 1 THEN 1 ELSE 0 END) AS total_ties,
+            SUM(CASE WHEN is_skip = 1 THEN 1 ELSE 0 END) AS total_skips
+        FROM (
+            -- Unpivot for model_a
+            SELECT
+                model_a_name AS model_name,
+                CASE WHEN winner = 'model_a' THEN 1 ELSE 0 END AS is_win,
+                CASE WHEN winner = 'tie' THEN 1 ELSE 0 END AS is_tie,
+                CASE WHEN winner = 'skip' THEN 1 ELSE 0 END AS is_skip
+            FROM battles
+            WHERE status = 'completed'
+            UNION ALL
+            -- Unpivot for model_b
+            SELECT
+                model_b_name AS model_name,
+                CASE WHEN winner = 'model_b' THEN 1 ELSE 0 END AS is_win,
+                CASE WHEN winner = 'tie' THEN 1 ELSE 0 END AS is_tie,
+                CASE WHEN winner = 'skip' THEN 1 ELSE 0 END AS is_skip
+            FROM battles
+            WHERE status = 'completed'
+        ) AS unpivoted_battles
+        GROUP BY model_name;
+        """
+        df = pd.read_sql_query(query, conn)
+    finally:
+        conn.close()
+
+    # 将DataFrame转换为所需的字典格式 {model_name: {battles: x, wins: y, ties: z, skips: s, win_rate_percentage: p}}
+    stats_dict = {}
+    for _, row in df.iterrows():
+        total_battles = row['total_battles']
+        total_wins = row['total_wins']
+        total_ties = row['total_ties']
+        total_skips = row['total_skips']
+        
+        # 计算有效对战场次 (总场次 - 平局 - 跳过)
+        effective_battles = total_battles - total_ties - total_skips
+        
+        # 计算胜率
+        if effective_battles > 0:
+            win_rate = total_wins / effective_battles
+        else:
+            win_rate = 0
+            
+        stats_dict[row['model_name']] = {
+            "battles": total_battles,
+            "wins": total_wins,
+            "ties": total_ties,
+            "skips": total_skips,
+            "win_rate_percentage": round(win_rate * 100, 2)  # 以百分比形式返回，保留两位小数
+        }
+    
+    return stats_dict

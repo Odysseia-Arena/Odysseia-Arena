@@ -70,12 +70,13 @@ def run_promotion_relegation_scheduler():
     启动一个后台调度器，在北京时间每天凌晨4点运行模型升降级任务。
     """
     scheduler = BackgroundScheduler(timezone='Asia/Shanghai')
+    # 将任务安排在4:01，以确保4:00的周期性评分更新已完成
     scheduler.add_job(
         tier_manager.promote_and_relegate_models,
-        trigger=CronTrigger(hour=4, minute=0),
+        trigger=CronTrigger(hour=4, minute=1),
         id='daily_promotion_relegation',
         name='Daily Model Promotion and Relegation',
         replace_existing=True
     )
     scheduler.start()
-    print("Promotion/relegation scheduler started, scheduled to run daily at 04:00 Shanghai time.")
+    print("Promotion/relegation scheduler started, scheduled to run daily at 04:01 Shanghai time.")

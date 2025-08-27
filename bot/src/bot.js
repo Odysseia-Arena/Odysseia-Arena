@@ -55,11 +55,11 @@ function allowedUserRoleMentions() {
 // 用于存储进行中的对战信息
 const activeBattles = new Map();
 
-// --- 新增：格式化模型名称，添加专属Emoji ---
+ // --- 新增：格式化模型名称，添加专属Emoji ---
 function formatModelName(modelName) {
   if (!modelName) return 'N/A';
   const lowerCaseName = modelName.toLowerCase();
-  if (lowerCaseName.includes('gemini')) return `<:Gemini:1397074784520765522> ${modelName}`;
+  if (lowerCaseName.includes('gemini') || lowerCaseName.includes('gemma')) return `<:Gemini:1397074784520765522> ${modelName}`;
   if (lowerCaseName.includes('claude')) return `<:Claude:1300123863329406998> ${modelName}`;
   if (lowerCaseName.includes('gpt')) return `<:Gpt_purple:1398207128451416084> ${modelName}`;
   if (lowerCaseName.includes('grok')) return `<:Grok:1397075985706385561> ${modelName}`;
@@ -70,7 +70,29 @@ function formatModelName(modelName) {
   if (lowerCaseName.includes('anon')) return `<:__:1331570533078274061> ${modelName}`;
   if (lowerCaseName.includes('doubao')) return `<:doubao:1409041294218756159> ${modelName}`;
   if (lowerCaseName.includes('step')) return `<:step:1409011619924803624> ${modelName}`;
+  if (lowerCaseName.includes('mistral')) return `<:Mistral:1409599047353897002> ${modelName}`;
+  if (lowerCaseName.includes('llama')) return `<:Llama:1409598678607462520> ${modelName}`;
+  if (lowerCaseName.includes('ernie')) return `<:ERNIE:1409597501128052837> ${modelName}`;
+  if (lowerCaseName.includes('command')) return `<:Cohere:1310420456385544263> ${modelName}`;
   return modelName;
+}
+
+// 统一安全截断 Embed 描述，保证 <= 4096 且补齐未闭合的代码块
+function safeTruncateEmbed(text) {
+  const MAX = 4096;
+  if (text == null) return '';
+  let s = String(text);
+  if (s.length <= MAX) return s;
+  // 先截断并添加省略号
+  s = s.slice(0, MAX - 3) + '...';
+  // 如有未闭合的 ``` 代码块，补齐并确保总长度不超限
+  const fences = (s.match(/```/g) || []).length;
+  if (fences % 2 !== 0) {
+    s = s.slice(0, MAX - 7) + '...\n```';
+  }
+  // 再保险：硬性裁剪到上限
+  if (s.length > MAX) s = s.slice(0, MAX);
+  return s;
 }
 
 client.on('ready', () => {
@@ -85,86 +107,6 @@ client.on('interactionCreate', async (interaction) => {
   }
 });
 
-async function sendPaginatedLeaderboard(interaction, leaderboard, title) {
-  const ITEMS_PER_PAGE = 10;
-  let currentPage = 0;
-  const totalPages = Math.ceil(leaderboard.length / ITEMS_PER_PAGE);
-
-  const generateEmbed = (page) => {
-    const start = page * ITEMS_PER_PAGE;
-    const end = start + ITEMS_PER_PAGE;
-    const pagedItems = leaderboard.slice(start, end);
-
-    let description = '';
-    pagedItems.forEach((model, index) => {
-      const rank = interaction.commandName === 'leaderboard' ? model.rank : start + index + 1;
-      description += `## **${rank}. ${formatModelName(model.model_name)}**\n`;
-      description += `> **评分:** ${model.rating} (评分偏差: ${model.rating_deviation}, 波动率: ${model.volatility.toFixed(3)})\n`;
-      description += `> **胜率:** ${model.win_rate_percentage.toFixed(2)}%\n`;
-      description += `> **对战:** ${model.battles} (胜: ${model.wins}, 平: ${model.ties}, 跳过: ${model.skips})\n`;
-    });
-
-    return new EmbedBuilder()
-      .setColor(0xFFD700)
-      .setTitle(title)
-      .setDescription(description)
-      .setFooter({ text: `第 ${page + 1} / ${totalPages} 页` })
-      .setTimestamp();
-  };
-
-  const generateButtons = (page) => {
-    return new ActionRowBuilder()
-      .addComponents(
-        new ButtonBuilder()
-          .setCustomId('leaderboard_prev')
-          .setLabel('⬅️ 上一页')
-          .setStyle(ButtonStyle.Primary)
-          .setDisabled(page === 0),
-        new ButtonBuilder()
-          .setCustomId('leaderboard_next')
-          .setLabel('下一页 ➡️')
-          .setStyle(ButtonStyle.Primary)
-          .setDisabled(page === totalPages - 1)
-      );
-  };
-
-  const embed = generateEmbed(currentPage);
-  const row = generateButtons(currentPage);
-
-  const message = await interaction.editReply({
-    embeds: [embed],
-    components: totalPages > 1 ? [row] : [],
-  });
-
-  if (totalPages <= 1) return;
-
-  const collector = message.createMessageComponentCollector({
-    filter: i => i.user.id === interaction.user.id && (i.customId === 'leaderboard_prev' || i.customId === 'leaderboard_next'),
-    time: 5 * 60 * 1000, // 5 分钟
-  });
-
-  collector.on('collect', async i => {
-    if (i.customId === 'leaderboard_prev') {
-      currentPage--;
-    } else if (i.customId === 'leaderboard_next') {
-      currentPage++;
-    }
-
-    const newEmbed = generateEmbed(currentPage);
-    const newRow = generateButtons(currentPage);
-
-    await i.update({ embeds: [newEmbed], components: [newRow] });
-  });
-
-  collector.on('end', () => {
-    const disabledRow = new ActionRowBuilder()
-      .addComponents(
-        ButtonBuilder.from(row.components[0]).setDisabled(true),
-        ButtonBuilder.from(row.components[1]).setDisabled(true)
-      );
-    interaction.editReply({ components: [disabledRow] }).catch(console.error);
-  });
-}
 async function sendPaginatedLeaderboard(interaction, leaderboard, title, nextUpdateTime) {
   const ITEMS_PER_PAGE = 10;
   let currentPage = 0;
@@ -177,15 +119,15 @@ async function sendPaginatedLeaderboard(interaction, leaderboard, title, nextUpd
 
     let description = '';
     pagedItems.forEach((model, index) => {
-      const rank = interaction.commandName === 'leaderboard' ? model.rank : start + index + 1;
+      const rank = start + index + 1;
       const ratingDiff = model.rating_realtime - model.rating;
       const ratingSymbol = ratingDiff > 0 ? '🔼' : (ratingDiff < 0 ? '🔽' : '');
       
       description += `# **${rank}. ${formatModelName(model.model_name)}**\n`;
       description += `> **评分:** ${model.rating} -> **${model.rating_realtime}** ${ratingSymbol}\n`;
-      description += `> **(评分偏差:** ${model.rating_deviation} -> **${model.rating_deviation_realtime}** / **波动率:** ${model.volatility.toFixed(3)} -> **${model.volatility_realtime.toFixed(3)}**)\n`;
+      description += `> **(评分偏差:** ${model.rating_deviation} -> **${model.rating_deviation_realtime}** / **波动率:** ${(model.volatility * 1000).toFixed(2)}‰ -> **${(model.volatility_realtime * 1000).toFixed(2)}‰**)\n`;
       description += `> **胜率:** ${model.win_rate_percentage.toFixed(2)}%\n`;
-      description += `> **对战:** ${model.battles} (胜: ${model.wins}, 平: ${model.ties}, 跳过: ${model.skips})\n`;
+      description += `> **对战:** ${model.battles} (胜: ${model.wins}, 平: ${model.ties}, 弃权: ${model.skips})\n`;
     });
 
     const nextUpdate = new Date(nextUpdateTime);
@@ -194,7 +136,7 @@ async function sendPaginatedLeaderboard(interaction, leaderboard, title, nextUpd
     return new EmbedBuilder()
       .setColor(0xFFD700)
       .setTitle(title)
-      .setDescription(description)
+      .setDescription(safeTruncateEmbed(description))
       .setFooter({ text: footerText })
       .setTimestamp();
   };
@@ -263,9 +205,9 @@ async function handleCommand(interaction) {
         ? `此命令仅限以下用户/角色使用：${allowedUserRoleMentions()}`
         : '此命令暂不可用。';
       if (!interaction.deferred && !interaction.replied) {
-        await interaction.reply({ content: tips, flags: 'Ephemeral' });
+        await interaction.reply({ content: `<@${interaction.user.id}> ${tips}`, flags: 'Ephemeral' });
       } else {
-        await interaction.followUp({ content: tips, flags: 'Ephemeral' });
+        await interaction.followUp({ content: `<@${interaction.user.id}> ${tips}`, flags: 'Ephemeral' });
       }
       return;
     }
@@ -277,9 +219,9 @@ async function handleCommand(interaction) {
         ? `此命令仅限在以下频道使用：${allowedMentionList()}`
         : '此命令暂不可用。';
       if (!interaction.deferred && !interaction.replied) {
-        await interaction.reply({ content: tips, flags: 'Ephemeral' });
+        await interaction.reply({ content: `<@${interaction.user.id}> ${tips}`, flags: 'Ephemeral' });
       } else {
-        await interaction.followUp({ content: tips, flags: 'Ephemeral' });
+        await interaction.followUp({ content: `<@${interaction.user.id}> ${tips}`, flags: 'Ephemeral' });
       }
       return;
     }
@@ -311,7 +253,8 @@ async function handleCommand(interaction) {
       const embed = new EmbedBuilder()
         .setColor(0x0099FF)
         .setTitle('⚔️ 新的对战！')
-        .setFooter({ text: `对战 ID: ${battle.battle_id}\n状态: 等待投票` });
+        .addFields({ name: '对战 ID', value: `${battle.battle_id}` })
+        .setFooter({ text: `状态: 等待投票` });
 
       // --- 使用 Description 字段智能展示 ---
       const themeText = battle.prompt_theme ? `**主题：** ${battle.prompt_theme}\n\n` : '';
@@ -372,10 +315,10 @@ async function handleCommand(interaction) {
         const codeBlockMatch = finalDescriptionText.match(/```/g);
         if (codeBlockMatch && codeBlockMatch.length % 2 !== 0) {
           // 如果是奇数个，说明有未闭合的，我们把它补上
-          finalDescriptionText = finalDescriptionText.substring(0, 4090) + '...\n```';
+          finalDescriptionText = finalDescriptionText.substring(0, 4089) + '...\n```';
         }
       }
-      embed.setDescription(finalDescriptionText);
+      embed.setDescription(safeTruncateEmbed(finalDescriptionText));
 
       if (truncated) {
         let hint = '';
@@ -389,7 +332,7 @@ async function handleCommand(interaction) {
         embed.addFields({ name: '提示', value: `${hint}，请点击下方按钮查看完整内容。` });
       }
 
-      embed.addFields({ name: '❗ 注意', value: '创建的对战若30分钟内无人投票将被自动销毁。成功投票的对战可被永久保存，并通过ID随时查询。' });
+      embed.addFields({ name: '❗ 注意', value: '创建的对战若30分钟内无人投票将被自动销毁。成功投票的对战可被永久保存，并通过ID随时查询，可通过下方按钮查看全文。' });
 
       // 步骤3：准备按钮
       const viewButtons = new ActionRowBuilder()
@@ -420,7 +363,7 @@ async function handleCommand(interaction) {
             .setStyle(ButtonStyle.Secondary),
           new ButtonBuilder()
             .setCustomId(`vote:${battle.battle_id}:skip`)
-            .setLabel('⏭️ 跳过')
+            .setLabel('弃权')
             .setStyle(ButtonStyle.Secondary)
         );
       
@@ -491,9 +434,9 @@ async function handleCommand(interaction) {
         ? `此命令仅限在以下频道使用：${allowedMentionList()}`
         : '此命令暂不可用。';
       if (!interaction.deferred && !interaction.replied) {
-        await interaction.reply({ content: tips, flags: 'Ephemeral' });
+        await interaction.reply({ content: `<@${interaction.user.id}> ${tips}`, flags: 'Ephemeral' });
       } else {
-        await interaction.followUp({ content: tips, flags: 'Ephemeral' });
+        await interaction.followUp({ content: `<@${interaction.user.id}> ${tips}`, flags: 'Ephemeral' });
       }
       return;
     }
@@ -518,14 +461,18 @@ async function handleCommand(interaction) {
         return;
       }
 
+      // 按实时评分降序排序
+      leaderboard.sort((a, b) => b.rating_realtime - a.rating_realtime);
+
       await sendPaginatedLeaderboard(interaction, leaderboard, title, next_update_time);
 
     } catch (error) {
       console.error('获取排行榜时出错:', error);
+      const errorMsg = `<@${interaction.user.id}> 获取排行榜失败，请稍后再试。`;
       if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({ content: '获取排行榜失败，请稍后再试。', flags: 'Ephemeral' });
+        await interaction.reply({ content: errorMsg, flags: 'Ephemeral' });
       } else {
-        await interaction.editReply({ content: '获取排行榜失败，请稍后再试。' });
+        await interaction.editReply({ content: errorMsg });
       }
     }
   } else if (interaction.commandName === 'battleinfo') {
@@ -535,9 +482,9 @@ async function handleCommand(interaction) {
         ? `此命令仅限在以下频道使用：${allowedMentionList()}`
         : '此命令暂不可用。';
       if (!interaction.deferred && !interaction.replied) {
-        await interaction.reply({ content: tips, flags: 'Ephemeral' });
+        await interaction.reply({ content: `<@${interaction.user.id}> ${tips}`, flags: 'Ephemeral' });
       } else {
-        await interaction.followUp({ content: tips, flags: 'Ephemeral' });
+        await interaction.followUp({ content: `<@${interaction.user.id}> ${tips}`, flags: 'Ephemeral' });
       }
       return;
     }
@@ -571,7 +518,8 @@ async function handleCommand(interaction) {
       const embed = new EmbedBuilder()
         .setColor(statusRaw === 'completed' ? 0x57F287 : 0x0099FF)
         .setTitle('⚔️ 对战详情')
-        .setFooter({ text: `对战 ID: ${data.battle_id}\n状态: ${statusDisplay}` });
+        .addFields({ name: '对战 ID', value: `${data.battle_id}` })
+        .setFooter({ text: `状态: ${statusDisplay}` });
 
       // --- 复用 /battle 命令的智能截断和展示逻辑 ---
       const themeText = data.prompt_theme ? `**主题：** ${data.prompt_theme}\n\n` : '';
@@ -625,10 +573,10 @@ async function handleCommand(interaction) {
         finalDescriptionText = finalDescriptionText.substring(0, 4093) + '...';
         const codeBlockMatch = finalDescriptionText.match(/```/g);
         if (codeBlockMatch && codeBlockMatch.length % 2 !== 0) {
-          finalDescriptionText = finalDescriptionText.substring(0, 4090) + '...\n```';
+          finalDescriptionText = finalDescriptionText.substring(0, 4089) + '...\n```';
         }
       }
-      embed.setDescription(finalDescriptionText);
+      embed.setDescription(safeTruncateEmbed(finalDescriptionText));
 
       if (truncated) {
         let hint = '';
@@ -659,15 +607,15 @@ async function handleCommand(interaction) {
       if (statusRaw === 'completed') {
         let winnerText = 'N/A';
         if (data.winner === 'model_a') {
-          winnerText = '模型 A';
+          winnerText = formatModelName(data.model_a);
         } else if (data.winner === 'model_b') {
-          winnerText = '模型 B';
+          winnerText = formatModelName(data.model_b);
         } else if (data.winner === 'Tie') {
           winnerText = '平局';
         } else if (data.winner === 'Skipped') {
           winnerText = '跳过';
         } else if (data.winner) {
-          winnerText = data.winner;
+          winnerText = formatModelName(data.winner);
         }
 
         embed.addFields(
@@ -686,10 +634,11 @@ async function handleCommand(interaction) {
       const code = error?.response?.status;
       const detail = error?.response?.data?.detail || error?.message || '未知错误';
       const msg = code === 404 ? '未找到该对战，请确认对战 ID 是否正确。' : `获取对战详情失败：${detail}`;
+      const errorMsg = `<@${interaction.user.id}> ${msg}`;
       if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({ content: msg, flags: 'Ephemeral' });
+        await interaction.reply({ content: errorMsg, flags: 'Ephemeral' });
       } else {
-        await interaction.editReply({ content: msg });
+        await interaction.editReply({ content: errorMsg });
       }
     }
 
@@ -700,9 +649,9 @@ async function handleCommand(interaction) {
         ? `此命令仅限在以下频道使用：${allowedMentionList()}`
         : '此命令暂不可用。';
       if (!interaction.deferred && !interaction.replied) {
-        await interaction.reply({ content: tips, flags: 'Ephemeral' });
+        await interaction.reply({ content: `<@${interaction.user.id}> ${tips}`, flags: 'Ephemeral' });
       } else {
-        await interaction.followUp({ content: tips, flags: 'Ephemeral' });
+        await interaction.followUp({ content: `<@${interaction.user.id}> ${tips}`, flags: 'Ephemeral' });
       }
       return;
     }
@@ -712,7 +661,7 @@ async function handleCommand(interaction) {
       await interaction.deferReply({ flags: 'Ephemeral' });
       const url = `${API_URL}/health`;
       console.log(`[API] Sending GET request to ${url}`);
-      const response = await axios.get(url);
+      const response = await axios.get(url, { timeout: 30000 }); // 30秒超时
       const data = response.data;
 
       const ok = data.status === 'ok';
@@ -731,11 +680,15 @@ async function handleCommand(interaction) {
       await interaction.editReply({ embeds: [embed] });
     } catch (error) {
       console.error('获取健康检查时出错:', error.response ? error.response.data : error.message);
-      const detail = error?.response?.data?.detail || error?.message || '未知错误';
+      let detail = error?.response?.data?.detail || error?.message || '未知错误';
+      if (error.code === 'ECONNABORTED') {
+        detail = '请求超时（超过30秒无响应），后端服务可能无响应或负载过高。';
+      }
+      const errorMsg = `<@${interaction.user.id}> 获取健康检查失败：${detail}`;
       if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({ content: `获取健康检查失败：${detail}`, flags: 'Ephemeral' });
+        await interaction.reply({ content: errorMsg, flags: 'Ephemeral' });
       } else {
-        await interaction.editReply({ content: `获取健康检查失败：${detail}` });
+        await interaction.editReply({ content: errorMsg });
       }
     }
   } else if (interaction.commandName === 'battleback') {
@@ -744,7 +697,7 @@ async function handleCommand(interaction) {
       const tips = ALLOWED_CHANNEL_IDS.size
         ? `此命令仅限在以下频道使用：${allowedMentionList()}`
         : '此命令暂不可用。';
-      await interaction.reply({ content: tips, flags: 'Ephemeral' });
+      await interaction.reply({ content: `<@${interaction.user.id}> ${tips}`, flags: 'Ephemeral' });
       return;
     }
 
@@ -778,7 +731,8 @@ async function handleCommand(interaction) {
         const embed = new EmbedBuilder()
           .setColor(statusRaw === 'completed' ? 0x57F287 : 0x0099FF)
           .setTitle('⚔️ 召回对战成功！')
-          .setFooter({ text: `对战 ID: ${battle.battle_id}\n状态: ${statusDisplay}` });
+          .addFields({ name: '对战 ID', value: `${battle.battle_id}` })
+          .setFooter({ text: `状态: ${statusDisplay}` });
 
         const themeText = battle.prompt_theme ? `**主题：** ${battle.prompt_theme}\n\n` : '';
         const quotedPrompt = battle.prompt.split('\n').map(line => `> ${line}`).join('\n');
@@ -823,7 +777,16 @@ async function handleCommand(interaction) {
         const finalDescription = baseText +
                                  templateA.replace('%content%', responseA_display) +
                                  templateB.replace('%content%', responseB_display);
-        embed.setDescription(finalDescription);
+
+        let finalDescriptionText = finalDescription;
+        if (finalDescriptionText.length > 4096) {
+          finalDescriptionText = finalDescriptionText.substring(0, 4093) + '...';
+          const codeBlockMatch = finalDescriptionText.match(/```/g);
+          if (codeBlockMatch && codeBlockMatch.length % 2 !== 0) {
+            finalDescriptionText = finalDescriptionText.substring(0, 4089) + '...\n```';
+          }
+        }
+        embed.setDescription(safeTruncateEmbed(finalDescriptionText));
         
         const components = [];
         const viewButtons = new ActionRowBuilder()
@@ -840,16 +803,22 @@ async function handleCommand(interaction) {
               new ButtonBuilder().setCustomId(`vote:${battle.battle_id}:model_a`).setLabel('👍 投给模型 A').setStyle(ButtonStyle.Primary),
               new ButtonBuilder().setCustomId(`vote:${battle.battle_id}:model_b`).setLabel('👍 投给模型 B').setStyle(ButtonStyle.Primary),
               new ButtonBuilder().setCustomId(`vote:${battle.battle_id}:tie`).setLabel('🤝 平局').setStyle(ButtonStyle.Secondary),
-              new ButtonBuilder().setCustomId(`vote:${battle.battle_id}:skip`).setLabel('⏭️ 跳过').setStyle(ButtonStyle.Secondary)
+              new ButtonBuilder().setCustomId(`vote:${battle.battle_id}:skip`).setLabel('弃权').setStyle(ButtonStyle.Secondary)
             );
           components.push(voteButtons);
         } else if (statusRaw === 'completed') {
             let winnerText = 'N/A';
-            if (battle.winner === 'model_a') winnerText = '模型 A';
-            else if (battle.winner === 'model_b') winnerText = '模型 B';
-            else if (battle.winner === 'Tie') winnerText = '平局';
-            else if (battle.winner === 'Skipped') winnerText = '跳过';
-            else if (battle.winner) winnerText = battle.winner;
+            if (battle.winner === 'model_a') {
+              winnerText = formatModelName(battle.model_a);
+            } else if (battle.winner === 'model_b') {
+              winnerText = formatModelName(battle.model_b);
+            } else if (battle.winner === 'Tie') {
+              winnerText = '平局';
+            } else if (battle.winner === 'Skipped') {
+              winnerText = '跳过';
+            } else if (battle.winner) {
+              winnerText = formatModelName(battle.winner);
+            }
             embed.addFields(
               { name: '模型 A 名称', value: formatModelName(battle.model_a), inline: true },
               { name: '模型 B 名称', value: formatModelName(battle.model_b), inline: true },
@@ -861,19 +830,19 @@ async function handleCommand(interaction) {
       } else {
         // 其他情况，通常是 "未找到记录"
         const detail = data.detail || '无法召回对战，可能没有正在进行的对战。';
-        await interaction.editReply({ content: detail });
+        await interaction.editReply({ content: `<@${interaction.user.id}> ${detail}` });
       }
     } catch (error) {
       console.error('召回对战时出错:', error.response ? JSON.stringify(error.response.data, null, 2) : error.message);
       const detail = error?.response?.data?.detail || '召回对战失败，请稍后再试。';
-      await interaction.editReply({ content: detail });
+      await interaction.editReply({ content: `<@${interaction.user.id}> ${detail}` });
     }
   } else if (interaction.commandName === 'battleunstuck') {
     if (!isChannelAllowed(interaction.channelId)) {
       const tips = ALLOWED_CHANNEL_IDS.size
         ? `此命令仅限在以下频道使用：${allowedMentionList()}`
         : '此命令暂不可用。';
-      await interaction.reply({ content: tips, flags: 'Ephemeral' });
+      await interaction.reply({ content: `<@${interaction.user.id}> ${tips}`, flags: 'Ephemeral' });
       return;
     }
 
@@ -885,12 +854,12 @@ async function handleCommand(interaction) {
       });
 
       const message = response.data.message || '操作已完成，但未收到明确消息。';
-      await interaction.editReply({ content: message });
+      await interaction.editReply({ content: `<@${interaction.user.id}> ${message}` });
 
     } catch (error) {
       console.error('清除卡住的对战时出错:', error.response ? JSON.stringify(error.response.data, null, 2) : error.message);
       const detail = error?.response?.data?.detail || '操作失败，请稍后再试。';
-      await interaction.editReply({ content: detail });
+      await interaction.editReply({ content: `<@${interaction.user.id}> ${detail}` });
     }
   }
 }
@@ -935,7 +904,7 @@ async function handleViewFullButton(interaction, battleId, modelChoice) {
     if (response.data && response.data.key) {
       const pasteUrl = `https://pasteme.cn/api/v3/paste/${response.data.key}`;
       // 在链接两边加上尖括号，防止 Discord 爬虫预取
-      await interaction.editReply({ content: `以下是 **${modelName}** 的完整内容链接（链接300秒后或查看一次后失效）：\n<${pasteUrl}>` });
+      await interaction.editReply({ content: `<@${interaction.user.id}> 以下是 **${modelName}** 的完整内容链接（链接300秒后或查看一次后失效）：\n<${pasteUrl}>` });
     } else {
       // 如果 API 成功但没有返回 key，也作为错误处理
       console.error('pasteme.cn API 响应异常:', response.data);
@@ -1005,27 +974,30 @@ async function handleVoteButton(interaction, battleId, choice) {
       const originalEmbed = interaction.message.embeds[0];
       let winnerText = 'N/A';
       if (voteResult.winner === 'model_a') {
-        winnerText = '模型 A';
+        winnerText = formatModelName(voteResult.model_a_name);
       } else if (voteResult.winner === 'model_b') {
-        winnerText = '模型 B';
+        winnerText = formatModelName(voteResult.model_b_name);
       } else if (voteResult.winner === 'Tie') {
         winnerText = '平局';
       } else if (voteResult.winner === 'Skipped') {
         winnerText = '跳过';
       } else if (voteResult.winner) {
-        winnerText = voteResult.winner;
+        winnerText = formatModelName(voteResult.winner);
       }
 
-      const updatedEmbed = new EmbedBuilder(originalEmbed.toJSON())
+      // 创建一个全新的 Embed，而不是基于旧的修改，以避免潜在的渲染问题
+      const updatedEmbed = new EmbedBuilder()
         .setColor(0x57F287)
         .setTitle('⚔️ 对战已完成！')
-        .setFooter({ text: `对战 ID: ${battleId}\n状态: 已完成` })
+        .setDescription(safeTruncateEmbed(originalEmbed?.description ?? '')) // 保留原始的 prompt 和回答部分
         .addFields(
+          { name: '对战 ID', value: battleId },
           { name: '获胜者', value: `**${winnerText}**`, inline: false },
           { name: '模型 A 名称', value: formatModelName(voteResult.model_a_name), inline: true },
           { name: '模型 B 名称', value: formatModelName(voteResult.model_b_name), inline: true },
-          { name: '❗ 注意', value: '此对战的完整内容将在5分钟后销毁，请及时通过下方按钮查看或保存。' }
-        );
+          { name: '❗ 注意', value: '此条消息会在5分钟销毁，请及时通过下方按钮查看或保存，也可通过其他指令重新查看本对战的完整内容。' }
+        )
+        .setFooter({ text: `状态: 已完成` });
 
       // 保留查看按钮，禁用投票按钮
       const originalComponents = interaction.message.components;
@@ -1074,7 +1046,7 @@ async function handleVoteButton(interaction, battleId, choice) {
       });
     } else {
       // 其他API错误，使用 followUp 发送临时消息，避免修改原始投票界面
-      await interaction.followUp({ content: `投票失败：${String(detail)}`, flags: 'Ephemeral' });
+      await interaction.followUp({ content: `<@${interaction.user.id}> 投票失败：${String(detail)}`, flags: 'Ephemeral' });
     }
   }
 }

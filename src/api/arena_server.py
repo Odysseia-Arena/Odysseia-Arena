@@ -196,13 +196,19 @@ async def unstuck_battle_endpoint(request_body: UnstuckRequest):
     """处理用户的“脱离卡死”请求"""
     logger.info(f"Received request for /battleunstuck from discord_id: {request_body.discord_id}")
     try:
-        was_stuck = battle_controller.unstuck_battle(request_body.discord_id)
-        if was_stuck:
-            log_event("BATTLE_UNSTUCK", {"discord_id": request_body.discord_id})
-            return {"message": "您卡住的对战已被清除，现在可以重新开始了。"}
+        deleted_count = battle_controller.unstuck_battle(request_body.discord_id)
+        
+        if deleted_count > 0:
+            log_event("BATTLES_UNSTUCK", {"discord_id": request_body.discord_id, "count": deleted_count})
+            if deleted_count == 1:
+                message = "您卡住的1场对战已被清除，现在可以重新开始了。"
+            else:
+                message = f"您卡住的 {deleted_count} 场对战已被全部清除，现在可以重新开始了。"
+            return {"message": message}
         else:
-            log_event("BATTLE_UNSTUCK_NOT_FOUND", {"discord_id": request_body.discord_id})
+            log_event("BATTLES_UNSTUCK_NOT_FOUND", {"discord_id": request_body.discord_id})
             return {"message": "没有找到需要清除的对战。"}
+            
     except Exception as e:
         logger.exception("处理 /battleunstuck 请求时发生未知错误")
         log_error(f"处理 /battleunstuck 时发生未知错误: {e}", {"discord_id": request_body.discord_id})
@@ -256,6 +262,20 @@ async def get_leaderboard():
         # 生成排行榜主体数据
         leaderboard = glicko2_rating.generate_leaderboard()
         
+        # 获取额外的统计数据
+        model_stats = statistics_calculator.get_all_models_stats()
+        
+        # 将统计数据合并到排行榜中
+        for model_data in leaderboard:
+            model_name = model_data["model_name"]
+            if model_name in model_stats:
+                stats = model_stats[model_name]
+                model_data["battles"] = stats.get("battles", 0)
+                model_data["wins"] = stats.get("wins", 0)
+                model_data["ties"] = stats.get("ties", 0)
+                model_data["skips"] = stats.get("skips", 0)
+                model_data["win_rate_percentage"] = stats.get("win_rate_percentage", 0)
+
         # 计算下次更新时间
         now = datetime.datetime.now()
         next_update_dt = (now + datetime.timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)

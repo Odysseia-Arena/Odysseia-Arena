@@ -39,14 +39,16 @@ VOTE_TIME_WINDOW = 30 * 60 # 30分钟内不能重复投票
 BATTLE_CREATION_WINDOW = 60 * 60  # 1小时
 MAX_BATTLES_PER_HOUR = int(os.getenv("MAX_BATTLES_PER_HOUR", 20))
 MIN_BATTLE_INTERVAL = int(os.getenv("MIN_BATTLE_INTERVAL", 30))
-ENABLE_SERIAL_BATTLE_LIMIT = os.getenv("ENABLE_SERIAL_BATTLE_LIMIT", "False").lower() in ('true', '1', 't')
+# 并行对战限制 (0 表示无限制)
+MAX_CONCURRENT_BATTLES = int(os.getenv("MAX_CONCURRENT_BATTLES", 1))
 
 # --- 对战清理配置 ---
-GENERATION_TIMEOUT = 12 * 60      # 12分钟生成超时
+# API 请求和对战生成超时时间（秒）
+GENERATION_TIMEOUT = int(os.getenv("GENERATION_TIMEOUT_SECONDS", 12 * 60))
 
 # --- 等级与升降级系统配置 ---
 PROMOTION_RELEGATION_COUNT = 3      # 每日升降级模型的数量
-TRANSITION_ZONE_SIZE = 3          # 过渡区大小（从每个等级中选出N个模型）
+TRANSITION_ZONE_SIZE = 5          # 过渡区大小（从每个等级中选出N个模型）
 # --- 动态加载的匹配概率 ---
 def get_match_probabilities() -> dict:
     """

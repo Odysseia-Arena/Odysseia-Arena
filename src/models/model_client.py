@@ -7,6 +7,7 @@ import asyncio
 from typing import Optional, List, Dict
 from dotenv import load_dotenv
 from curl_cffi.requests import AsyncSession
+from src.utils import config
 
 load_dotenv()
 
@@ -38,7 +39,7 @@ async def _call_openai_format(session: AsyncSession, model_id_to_call: str, prom
         payload["thinking"] = {"type": "enabled"}
 
     response = await session.post(
-        api_url, headers=headers, json=payload, timeout=60, impersonate="chrome110"
+        api_url, headers=headers, json=payload, timeout=config.GENERATION_TIMEOUT, impersonate="chrome110"
     )
     response.raise_for_status()
     data = response.json()
@@ -61,7 +62,7 @@ async def _call_anthropic_format(session: AsyncSession, model_id_to_call: str, p
         "temperature": 1.0
     }
     response = await session.post(
-        api_url, headers=headers, json=payload, timeout=60, impersonate="chrome110"
+        api_url, headers=headers, json=payload, timeout=config.GENERATION_TIMEOUT, impersonate="chrome110"
     )
     response.raise_for_status()
     data = response.json()

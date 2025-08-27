@@ -21,10 +21,11 @@ def _check_rate_limit(discord_id: str):
     if not discord_id:
         return  # 如果没有提供 discord_id，则跳过检查
 
-    # 1. 检查串行限制
-    if config.ENABLE_SERIAL_BATTLE_LIMIT:
-        if storage.has_pending_battle(discord_id):
-            message = "您有一个正在处理的对战，请在其完成后再试。使用 /battleback 查看上条对战信息"
+    # 1. 检查并行对战限制
+    if config.MAX_CONCURRENT_BATTLES > 0:
+        pending_battles_count = storage.get_pending_battle_count(discord_id)
+        if pending_battles_count >= config.MAX_CONCURRENT_BATTLES:
+            message = f"您当前有 {pending_battles_count} 场对战正在进行，已达到最大并行限制 ({config.MAX_CONCURRENT_BATTLES}场)。请完成后再试。"
             raise RateLimitError(message)
 
     # 使用 battle 记录的 created_at 作为计时起点
@@ -276,27 +277,23 @@ async def create_battle(battle_type: str, custom_prompt: str = None, discord_id:
             async def get_response(model, prompt_id, prompt_content):
                 model_id = model.get('id')
                 
-                # 检查模型是否符合预制回答的配置标准
+                # 检查模型是否为预制模型
                 if model_id in preset_models_map:
+                    logger.info(f"模型 {model_id} 是一个预制模型，尝试加载本地答案。")
                     preset_config = preset_models_map[model_id]
-                    # 验证 API URL 和 Key 是否匹配
-                    if (model.get('api_url') == preset_config.get('api_url') and
-                        model.get('api_key') == preset_config.get('api_key')):
-                        
-                        logger.info(f"模型 {model_id} 匹配预制回答配置。")
-                        filename_key = preset_config.get("filename")
+                    filename_key = preset_config.get("filename")
 
-                        if filename_key in preset_answers:
-                            preset_data = preset_answers[filename_key]
-                            if prompt_id in preset_data and preset_data[prompt_id]:
-                                logger.info(f"为 prompt_id '{prompt_id}' 找到预制回答。")
-                                return random.choice(preset_data[prompt_id])
-                            else:
-                                logger.warning(f"警告: 在文件 '{filename_key}' 中未找到 prompt_id '{prompt_id}' 的有效回答。")
-                                return f"错误: 模型 '{model['name']}' 的预制回答中不包含提示词 '{prompt_id}' 的答案。"
+                    if filename_key and filename_key in preset_answers:
+                        preset_data = preset_answers[filename_key]
+                        if prompt_id in preset_data and preset_data[prompt_id]:
+                            logger.info(f"为 prompt_id '{prompt_id}' 找到预制回答。")
+                            return random.choice(preset_data[prompt_id])
                         else:
-                            logger.error(f"错误: 预制模型配置指向了不存在的回答文件 '{filename_key}'。")
-                            return f"配置错误: 找不到模型 '{model['name']}' 所需的预制回答文件。"
+                            logger.warning(f"警告: 在文件 '{filename_key}' 中未找到 prompt_id '{prompt_id}' 的有效回答。")
+                            return f"错误: 模型 '{model['name']}' 的预制回答中不包含提示词 '{prompt_id}' 的答案。"
+                    else:
+                        logger.error(f"错误: 预制模型配置指向了不存在或无效的回答文件 '{filename_key}'。")
+                        return f"配置错误: 找不到模型 '{model['name']}' 所需的预制回答文件。"
                 
                 # 如果不匹配预制回答条件，则正常调用
                 return await model_client.call_model(model, prompt_content)
@@ -373,29 +370,31 @@ async def create_battle(battle_type: str, custom_prompt: str = None, discord_id:
     logger.error(f"创建对战 '{battle_id}' 失败，已达到最大重试次数。", exc_info=last_error)
     # 删除失败的占位记录
     storage.delete_battle_record(battle_id)
-    raise Exception(f"创建对战失败，请稍后重试。") from last_error
+    
+    # 根据最后一个错误类型，生成更具体的错误信息
+    final_error_message = "创建对战失败，请稍后重试。"
+    if last_error:
+        error_text = str(last_error).lower()
+        if "timed out" in error_text or "timeout" in error_text:
+            final_error_message = "创建对战失败：模型响应超时，请稍后重试。"
+        elif "404" in error_text:
+            final_error_message = "创建对战失败：找不到目标模型API，请检查配置。"
+        elif "503" in error_text:
+            final_error_message = "创建对战失败：模型服务暂时不可用，请稍后重试。"
 
-def unstuck_battle(discord_id: str) -> bool:
+    raise Exception(final_error_message) from last_error
+
+def unstuck_battle(discord_id: str) -> int:
     """
     处理用户的“脱离卡死”请求。
-    查找用户最新的非完成状态的对战并删除它。
+    查找并删除用户所有卡在“生成中”(pending_generation)状态的对战，返回删除的数量。
     """
     if not discord_id:
-        return False
+        return 0
 
-    latest_battle = storage.get_latest_battle_by_discord_id(discord_id)
-
-    if latest_battle and latest_battle["status"] != "completed":
-        battle_id = latest_battle["battle_id"]
-        
-        # 核心逻辑：直接删除记录。
-        # 如果对战处于 pending_generation，这会使其“孤立”，AI的响应将无处可去。
-        # 如果对战处于 pending_vote，它将从投票池中消失。
-        # 这是一个简单而有效的“终止”方式。
-        was_deleted = storage.delete_battle_record(battle_id)
-        
-        # 注意：不在这里处理排行榜回滚，因为这些未完成的对战从未影响过排行榜分数。
-        
-        return was_deleted
+    # 核心逻辑：调用批量删除函数，该函数现在只针对 pending_generation 状态
+    deleted_count = storage.delete_pending_battles_by_discord_id(discord_id)
     
-    return False
+    # 注意：不在这里处理排行榜回滚，因为这些未完成的对战从未影响过排行榜分数。
+    
+    return deleted_count
