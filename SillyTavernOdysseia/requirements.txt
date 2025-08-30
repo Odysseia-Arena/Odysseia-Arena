@@ -1,0 +1,50 @@
+# SillyTavern Odysseia 依赖
+
+# 核心依赖
+python>=3.8
+
+# JSON处理和数据操作
+# (Python标准库已包含json模块)
+
+# 日期时间处理  
+# (Python标准库已包含datetime模块)
+
+# 文件路径操作
+# (Python标准库已包含pathlib模块)
+
+# 数据类
+# (Python 3.7+ 标准库已包含dataclasses模块)
+
+# 类型提示
+# (Python 3.5+ 标准库已包含typing模块)
+
+# 正则表达式
+# (Python标准库已包含re模块)
+
+# 随机数生成
+# (Python标准库已包含random模块)
+
+# PNG图像处理（用于角色卡提取）
+Pillow>=8.0.0
+
+# Base64编码解码
+# (Python标准库已包含base64模块)
+
+# Zlib压缩
+# (Python标准库已包含zlib模块)
+
+# 开发和测试依赖
+pytest>=6.0.0
+pytest-cov>=2.0.0
+
+# 文档生成（可选）
+mkdocs>=1.4.0
+mkdocs-material>=8.0.0
+
+# 代码格式化（可选）
+black>=22.0.0
+isort>=5.0.0
+
+# 代码检查（可选）
+flake8>=4.0.0
+mypy>=0.900

@@ -1,0 +1,67 @@
+{
+  "name": "测试预设",
+  "model_settings": {
+    "temperature": 0.7,
+    "frequency_penalty": 0.0,
+    "presence_penalty": 0.0,
+    "top_p": 0.9,
+    "top_k": 40,
+    "max_context": 4096,
+    "max_tokens": 1024,
+    "stream": true
+  },
+  "prompts": [
+    {
+      "identifier": "main",
+      "name": "主要系统提示",
+      "content": "你是一个有用的AI助手。当前角色：{{char}}，用户：{{user}}",
+      "role": "system",
+      "position": "relative",
+      "depth": 4,
+      "group_weight": 100,
+      "enabled": true,
+      "code_block": "set_preset('system_initialized', True); set_preset('start_time', '{{time}}')"
+    },
+    {
+      "identifier": "charDescription",
+      "name": "角色描述",
+      "content": "",
+      "role": "system",
+      "position": "relative",
+      "enable": true
+    },
+    {
+      "identifier": "personaDescription",
+      "name": "用户描述",
+      "content": "",
+      "role": "system",
+      "position": "relative",
+      "enable": true
+    },
+    {
+      "identifier": "worldInfoBefore",
+      "name": "世界书前置",
+      "content": "",
+      "role": "system",
+      "position": "relative",
+      "enable": true
+    },
+    {
+      "identifier": "chatHistory",
+      "name": "聊天历史",
+      "content": "",
+      "role": "user",
+      "position": "relative",
+      "enable": true
+    },
+    {
+      "identifier": "worldInfoAfter",
+      "name": "世界书后置",
+      "content": "",
+      "role": "system", 
+      "position": "relative",
+      "enable": true
+    }
+  ],
+  "create_date": "2025-01-01"
+}

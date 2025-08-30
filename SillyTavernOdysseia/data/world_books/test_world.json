@@ -1,0 +1,33 @@
+{
+  "world_book": {
+    "name": "测试世界书",
+    "entries": [
+      {
+        "id": 0,
+        "name": "编程话题",
+        "keys": ["编程", "代码", "Python", "编码"],
+        "content": "当用户谈论编程时，我会提供实用的编程建议和代码示例。",
+        "enabled": true,
+        "mode": "conditional",
+        "position": "user",
+        "group_weight": 100,
+        "probability": 100,
+        "code_block": "set_world('programming_context', True)"
+      },
+      {
+        "id": 1,
+        "name": "学习环境",
+        "keys": ["学习", "知识", "教学"],
+        "content": "这是一个学习友好的环境，鼓励提问和探索。",
+        "enabled": true,
+        "mode": "conditional",
+        "position": "system",
+        "group_weight": 80,
+        "probability": 100,
+        "code_block": "set_world('learning_mode', True)"
+      }
+    ]
+  },
+  "tags": ["测试", "通用"],
+  "created_date": "2025-01-01"
+}

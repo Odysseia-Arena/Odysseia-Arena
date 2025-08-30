@@ -1,0 +1,31 @@
+{
+  "world_book": {
+    "name": "Modern Technology",
+    "entries": [
+      {
+        "id": 1,
+        "name": "internet_culture",
+        "enabled": true,
+        "mode": "conditional",
+        "position": "before_char",
+        "keys": ["internet", "social media", "online", "网络", "社交媒体", "在线"],
+        "content": "现代社会被互联网深深影响，社交媒体成为人们日常交流的重要平台。信息传播极快，但也伴随着假消息和网络暴力的问题。",
+        "group_weight": 60,
+        "probability": 100
+      },
+      {
+        "id": 2,
+        "name": "ai_technology",
+        "enabled": true,
+        "mode": "conditional",
+        "position": "after_char",
+        "keys": ["AI", "artificial intelligence", "machine learning", "人工智能", "机器学习"],
+        "content": "人工智能技术正在快速发展，从语音助手到自动驾驶，AI已经融入了生活的方方面面。这带来便利的同时也引发了关于就业和隐私的担忧。",
+        "group_weight": 40,
+        "probability": 100
+      }
+    ]
+  },
+  "tags": ["modern", "technology", "AI", "internet"],
+  "created_date": "2025-01-01"
+}
