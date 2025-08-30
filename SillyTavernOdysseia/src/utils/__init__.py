@@ -7,6 +7,6 @@ SillyTavern Odysseia Utils
 工具模块
 """
 
-from .macro_processor import MacroProcessor
+from .unified_macro_processor import UnifiedMacroProcessor, create_unified_macro_processor
 
-__all__ = ["MacroProcessor"]
+__all__ = ["UnifiedMacroProcessor", "create_unified_macro_processor"]

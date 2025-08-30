@@ -268,8 +268,11 @@ class PythonSandbox:
             
             return target_scope_vars.get(actual_name, default)
         
-        context['setvar'] = setvar
-        context['getvar'] = getvar
+        # 只有当temp_vars中没有提供时，才使用沙箱内部的版本
+        if 'setvar' not in context:
+            context['setvar'] = setvar
+        if 'getvar' not in context:
+            context['getvar'] = getvar
         
         # 添加带前缀的函数
         for name, func in self.scope_manager.conversation_funcs.items():

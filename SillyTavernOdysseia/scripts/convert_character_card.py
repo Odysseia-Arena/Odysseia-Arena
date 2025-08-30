@@ -13,7 +13,7 @@ from pathlib import Path
 from datetime import datetime
 
 
-def safe_get(obj, key, default=""):
+def safe_get(obj, key, default=None):
     """安全地获取对象属性"""
     if isinstance(obj, dict):
         return obj.get(key, default)
@@ -21,46 +21,74 @@ def safe_get(obj, key, default=""):
 
 
 def convert_world_book_entry(entry):
-    """转换世界书条目"""
+    """根据新规则转换世界书条目"""
+    
     converted = {
         "id": safe_get(entry, "id", 0),
-        "keys": safe_get(entry, "keys", []),
-        "secondary_keys": safe_get(entry, "secondary_keys", []),
-        "content": safe_get(entry, "content", ""),
-        "extensions": {
-            "position": safe_get(entry, "position", 0),
-            "group_weight": safe_get(entry, "extensions", {}).get("group_weight", 100)
-        },
-        "enabled": safe_get(entry, "enabled", True),
-        "insertion_order": safe_get(entry, "insertion_order", 100),
-        "case_sensitive": safe_get(entry, "case_sensitive", False),
         "name": safe_get(entry, "comment", ""),
-        "priority": safe_get(entry, "priority", 0),
-        "scanDepth": safe_get(entry, "scanDepth", 100),
-        "token_budget": safe_get(entry, "token_budget", 2048),
-        "recursive_scanning": safe_get(entry, "recursive_scanning", False)
+        "enabled": safe_get(entry, "enabled", True),
     }
+
+    constant = safe_get(entry, "constant", False)
+    vectorized = safe_get(entry, "extensions", {}).get("vectorized", False)
+    if constant is False and vectorized is True:
+        converted["mode"] = "vectorized"
+    elif constant is True:
+        converted["mode"] = "always"
+    else:
+        converted["mode"] = "conditional"
+
+    position = safe_get(entry, "position")
+    ext_position = safe_get(entry, "extensions", {}).get("position")
+    ext_role = safe_get(entry, "extensions", {}).get("role")
+    
+    if position == "before_char" and ext_position == 0:
+        converted["position"] = "before_char"
+    elif position == "after_char" and ext_position == 4 and ext_role == 0:
+        converted["position"] = "system"
+    elif position == "after_char" and ext_position == 4 and ext_role == 1:
+        converted["position"] = "user"
+    elif position == "after_char" and ext_position == 4 and ext_role == 2:
+        converted["position"] = "assistant"
+    elif position == "after_char" and ext_position == 1:
+        converted["position"] = "after_char"
+    else:
+        converted["position"] = "system"
+
+    if converted["position"] not in ["before_char", "after_char"]:
+        converted["depth"] = safe_get(entry, "extensions", {}).get("depth")
+    
+    converted["order"] = safe_get(entry, "insertion_order", 100)
+    converted["keys"] = safe_get(entry, "keys", [])
+    converted["content"] = safe_get(entry, "content", "")
+    converted["code_block"] = ""
+
     return converted
 
 
 def convert_character_card(character_data):
     """将SillyTavern v3角色卡转换为简化格式"""
     
-    # 基本信息
+    char_data = safe_get(character_data, "data", {})
+    
+    first_mes = safe_get(char_data, "first_mes", "")
+    alternate_greetings = safe_get(char_data, "alternate_greetings", [])
+    message = [first_mes] + alternate_greetings if first_mes else alternate_greetings
+
     simplified = {
         "name": safe_get(character_data, "name", "未知角色"),
         "description": safe_get(character_data, "description", ""),
-        "message": safe_get(character_data, "first_mes", ""),
-        "extensions": {},
-        "create_date": datetime.now().strftime("%Y-%m-%d"),
+        "message": message,
+        "code_block": "",
         "world_book": {
-            "name": f"{safe_get(character_data, 'name', '未知角色')}的世界书",
+            "name": safe_get(char_data, "character_book", {}).get("name", f"{safe_get(character_data, 'name', '未知角色')}的世界书"),
             "entries": []
-        }
+        },
+        "extensions": safe_get(char_data, "extensions", {}),
+        "create_date": datetime.now().strftime("%Y-%m-%d"),
     }
     
-    # 转换世界书
-    character_book = safe_get(character_data, "data", {}).get("character_book", {})
+    character_book = safe_get(char_data, "character_book", {})
     if character_book and isinstance(character_book, dict):
         entries = safe_get(character_book, "entries", [])
         if isinstance(entries, list):
@@ -84,14 +112,11 @@ def convert_file(input_path, output_path=None):
     print(f"🔄 正在转换 {input_path.name}...")
     
     try:
-        # 读取原始数据
         with open(input_path, 'r', encoding='utf-8') as f:
             character_data = json.load(f)
         
-        # 转换格式
         simplified = convert_character_card(character_data)
         
-        # 保存转换结果
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(simplified, f, ensure_ascii=False, indent=2)
         

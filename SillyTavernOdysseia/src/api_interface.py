@@ -18,16 +18,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 # 导入现有服务模块
-try:
-    # 尝试相对导入（当作为模块导入时）
-    from .services.config_manager import ConfigManager, create_config_manager
-    from .services.chat_history_manager import ChatHistoryManager, MessageRole, ChatMessage
-    from .services.conversation_manager import ConversationManager, create_conversation_manager
-except ImportError:
-    # 尝试绝对导入（当直接运行时）
-    from services.config_manager import ConfigManager, create_config_manager
-    from services.chat_history_manager import ChatHistoryManager, MessageRole, ChatMessage
-    from services.conversation_manager import ConversationManager, create_conversation_manager
+from .services.config_manager import ConfigManager, create_config_manager
+from .services.chat_history_manager import ChatHistoryManager, MessageRole, ChatMessage
+from .services.conversation_manager import ConversationManager, create_conversation_manager
 
 
 @dataclass
@@ -372,8 +365,6 @@ class ChatAPI:
         """处理完整对话历史输入"""
         
         # 🌟 将OpenAI格式的对话历史转换为内部ChatMessage格式
-        from src.services.chat_history_manager import ChatMessage, MessageRole
-        
         converted_history = []
         for msg in input_messages:
             role = MessageRole(msg['role']) if msg['role'] in ['system', 'user', 'assistant'] else MessageRole.USER
@@ -435,51 +426,6 @@ class ChatAPI:
             }
         )
     
-    def _handle_user_input(self, session_id: str, manager: ChatHistoryManager, user_input: str, output_formats: List[str]) -> ChatResponse:
-        """处理用户输入"""
-        
-        # 添加用户消息到历史
-        manager.add_user_message(user_input)
-        
-        # 检查条件世界书触发
-        manager._check_conditional_world_book(user_input)
-        
-        # 根据请求的格式生成输出
-        raw_prompt = None
-        processed_prompt = None 
-        clean_prompt = None
-        
-        if "raw" in output_formats:
-            raw_prompt = manager.to_raw_openai_format()
-        if "processed" in output_formats:
-            processed_prompt = manager.to_processed_openai_format(execute_code=True)
-        if "clean" in output_formats:
-            clean_prompt = manager.to_clean_openai_format(execute_code=True)
-        
-        # 向后兼容：final_prompt指向processed_prompt
-        final_prompt = processed_prompt
-        
-        # 保存对话状态
-        self._save_conversation(session_id, manager)
-        
-        return ChatResponse(
-            source_id=session_id,
-            raw_prompt=raw_prompt,
-            processed_prompt=processed_prompt,
-            clean_prompt=clean_prompt,
-            final_prompt=final_prompt,  # 向后兼容
-            is_character_message=False,
-            processing_info={
-                "user_input_length": len(user_input),
-                "total_messages": len(manager.chat_history),
-                "triggered_entries": len(manager.triggered_entries),
-                "output_formats": output_formats,
-                "prompt_blocks_raw": len(raw_prompt) if raw_prompt else 0,
-                "prompt_blocks_processed": len(processed_prompt) if processed_prompt else 0,
-                "prompt_blocks_clean": len(clean_prompt) if clean_prompt else 0
-            }
-        )
-    
     def _save_conversation(self, session_id: str, manager: ChatHistoryManager) -> None:
         """保存对话状态"""
         try:
@@ -531,7 +477,7 @@ class ChatAPI:
         try:
             if session_id in self._active_managers:
                 manager = self._active_managers[session_id]
-                return manager.to_openai_messages(enable_macros=False)
+                return [msg.to_openai_format() for msg in manager.chat_history]
             return []
         except Exception as e:
             print(f"⚠️ 获取对话历史失败: {e}")
@@ -552,7 +498,7 @@ class ChatAPI:
                 manager = self._active_managers[session_id]
                 manager.chat_history.clear()
                 manager.triggered_entries.clear()
-                manager.clear_macro_variables()
+                manager.macro_manager.clear_variables()
                 return True
             return False
         except Exception as e:

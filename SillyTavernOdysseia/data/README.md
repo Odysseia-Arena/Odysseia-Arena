@@ -132,7 +132,7 @@ manager.add_user_message("Hello!")
 manager.add_assistant_message("Hi there!")
 
 # 获取OpenAI格式消息
-messages = manager.to_openai_messages()
+messages = [msg.to_openai_format() for msg in manager.chat_history]
 ```
 
 ## 🔧 高级功能

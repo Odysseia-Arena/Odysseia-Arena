@@ -14,12 +14,11 @@
 - **条件触发**: 基于关键词的智能触发
 - **优先级排序**: insertion_order 排序控制
 
-### 🎭 宏处理系统
-- **顺序执行**: 按最终提示词顺序处理宏
-- **跨Role支持**: system、user、assistant 全部支持
-- **变量持久**: 会话期间变量状态保持
-- **嵌套宏**: 支持复杂的嵌套宏处理
-- **丰富功能**: 支持51%的SillyTavern宏 (43/85个) ✨
+### 🎭 统一宏处理系统
+- **统一执行**: 所有宏（传统宏和Python宏）都在安全的Python沙盒中执行，确保行为一致。
+- **作用域感知**: 支持 `preset_`、`char_`、`world_` 等前缀，实现跨作用域的变量访问。
+- **顺序处理**: 严格按照 `enabled` -> `code_block` -> `content` 的顺序处理每个条目，保证依赖关系正确。
+- **完全兼容**: 无缝支持SillyTavern传统宏，并在后台自动转换为Python代码执行。
 
 ### 🎛️ 动态enabled字段 ⭐ NEW
 - **智能条件**: 支持宏和Python表达式动态判断
@@ -48,31 +47,37 @@ pip install -r requirements.txt
 
 ### 基础使用
 ```python
-from src.services.config_manager import create_config_manager
+from src.api_interface import create_chat_api
 
-# 创建配置管理器
-config_manager = create_config_manager()
+# 1. 创建API实例
+api = create_chat_api(data_root="data")
 
-# 创建配置
-config = config_manager.create_config(
-    config_id="my_config",
-    name="我的配置",
-    preset_file="my_preset.simplified.json",
-    character_file="my_character.simplified.json",
-    persona_file="my_persona.json",
-    additional_world_book="my_world.json"
-)
+# 2. 构建请求 (推荐使用JSON输入格式)
+request = {
+    "session_id": "session_001",
+    "config_id": "test_config", # 确保你有一个名为 test_config 的配置
+    "input": [
+        {"role": "user", "content": "你好，{{char}}！现在是{{time}}。"},
+        {"role": "assistant", "content": "你好！有什么可以帮助你的吗？"},
+        {"role": "user", "content": "我想设置一个变量 {{python:setvar('test_var', 123)}}"}
+    ],
+    "output_formats": ["clean", "processed"] # 请求标准格式和带来源的格式
+}
 
-# 保存配置
-config_manager.save_config(config)
+# 3. 发送请求并获取响应
+response = api.chat_input_json(request)
 
-# 加载配置
-config_manager.set_current_config(config)
-manager = config_manager.get_current_manager()
+# 4. 使用结果
+if response.clean_prompt:
+    print("--- 标准OpenAI格式 (可直接用于API调用) ---")
+    for msg in response.clean_prompt:
+        print(f"[{msg['role']}] {msg['content']}")
 
-# 使用聊天管理器
-manager.add_user_message("Hello {{char}}! The time is {{time}}.")
-messages = manager.to_final_prompt_openai(enable_macros=True)
+if response.processed_prompt:
+    print("\n--- 带来源信息的格式 (用于调试) ---")
+    for msg in response.processed_prompt:
+        sources = msg.get('_source_types', [])
+        print(f"[{msg['role']}] (来源: {sources}) {msg['content']}")
 ```
 
 ## 📁 项目结构
@@ -80,12 +85,14 @@ messages = manager.to_final_prompt_openai(enable_macros=True)
 ```
 SillyTavern-Odysseia/
 ├── src/
-│   ├── services/           # 核心服务
+│   ├── api_interface.py               # 统一API接口
+│   ├── services/                      # 核心服务
 │   │   ├── chat_history_manager.py    # 聊天历史管理
 │   │   ├── config_manager.py          # 配置管理
 │   │   └── conversation_manager.py    # 对话管理
-│   └── utils/              # 工具模块
-│       └── macro_processor.py         # 宏处理器
+│   └── utils/                         # 工具模块
+│       ├── unified_macro_processor.py # 统一宏处理器（核心）
+│       └── python_sandbox.py          # Python沙箱
 ├── scripts/                # 转换脚本
 │   ├── extract_and_convert_card.py    # PNG角色卡提取
 │   ├── convert_character_card.py      # 角色卡格式转换
@@ -99,7 +106,7 @@ SillyTavern-Odysseia/
 │   └── configs/           # 配置组合
 └── docs/                  # 文档
     ├── API.md             # API文档
-    ├── MACROS.md          # 宏系统文档
+    ├── MACROS.md          # 权威的宏系统文档
     └── FILE_FORMATS.md    # 文件格式文档
 ```
 
@@ -161,11 +168,6 @@ SillyTavern-Odysseia/
 
 ## 🛠️ 开发
 
-### 运行测试
-```bash
-python scripts/test_system.py
-```
-
 ### 转换现有文件
 ```bash
 # 从PNG提取角色卡（基础版）
@@ -185,7 +187,7 @@ python scripts/convert_preset.py input.json -o output.simplified.json
 
 - [API使用指南](docs/API.md)
 - [文件格式说明](docs/FILE_FORMATS.md)
-- [宏系统文档](docs/MACROS.md)
+- [权威的宏系统文档](docs/MACROS.md)
 - [动态enabled设计](docs/DYNAMIC_ENABLED_DESIGN.md) ⭐ **NEW**
 - [排序规则说明](docs/次序规则.md)
 - [更新日志](docs/CHANGELOG.md) ⭐ **最新变更**

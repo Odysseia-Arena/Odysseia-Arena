@@ -60,7 +60,7 @@ class ConversationManager:
         conversation_file = self.current_dir / f"{conversation_id}.json"
         
         # 获取聊天历史
-        chat_history = manager.get_full_chat_history()
+        chat_history = manager.chat_history
         
         # 创建元数据
         metadata = ConversationMetadata(

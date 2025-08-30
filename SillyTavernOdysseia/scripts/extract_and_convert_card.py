@@ -16,6 +16,9 @@ import os
 from pathlib import Path
 from datetime import datetime
 
+# 导入经过验证的转换函数
+from convert_character_card import convert_character_card
+
 
 def read_chunks(png_path):
     """读取PNG文件中的所有chunks"""

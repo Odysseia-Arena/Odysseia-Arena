@@ -48,14 +48,6 @@ data/
 }
 ```
 
-### 世界书条目位置映射
-
-- `position: 0` → `role: "system"` (系统消息)
-- `position: 1` → `role: "user"` (用户消息)  
-- `position: 2` → `role: "assistant"` (助手消息)
-- `position: 3` → `position: "before_char"` (角色描述前)
-- `position: 4` → `position: "after_char"` (角色描述后)
-
 ## 🎯 预设格式
 
 ### 简化格式 (.simplified.json)
@@ -167,11 +159,11 @@ data/
 - `"relative"` - 在最终提示词中相对定位，按文件顺序排列
 
 #### 次序规则（适用于in-chat）
-1. 先看深度（depth），深度大的靠前
-2. 再看顺序（group_weight），数字小的越靠下  
-3. 再看role，按assistant → user → system顺序
-4. 最后按内部排列次序，越靠前的越在下面
-5. 相同role的内容会合并，用双换行符分隔
+1.  **深度 (depth)**: `depth` 值**越大**，条目在聊天历史中的位置越靠后（越接近最新的消息）。
+2.  **顺序 (order)**: 在 `depth` 相同的情况下，会比较 `order` 值。`order` 值**越小**，条目的优先级越高，位置越靠前。
+3.  **角色 (role)**: 如果 `depth` 和 `order` 都相同，则按角色优先级排序：`assistant` (最高) → `user` → `system` (最低)。
+4.  **文件内部顺序**: 如果以上所有条件都相同，则按照它们在原文件中的出现顺序排列。
+5.  **合并**: 排序完成后，所有相邻且角色相同的条目内容会被合并。
 
 ## 🐍 Python代码块系统
 
@@ -219,8 +211,8 @@ data/
 class ContentPart:
     content: str          # 实际内容
     source_type: str      # 'preset', 'char', 'world', 'conversation'
-    source_id: str        # 具体标识符
-    source_label: str     # 可选标签
+    source_id: str        # 具体标识符（内部使用）
+    source_name: str      # 来源名称（仅预设和世界书）
 
 @dataclass
 class ChatMessage:
@@ -360,8 +352,7 @@ python scripts/convert_tavern_personas.py <输入文件> --convert
         "enabled": true,
         "mode": "conditional",
         "position": "before_char",
-        "group_weight": 100,
-        "probability": 100,
+        "insertion_order": 100,
         "code_block": "set_world('location_triggered', True); print('世界书条目已触发')"
       },
       {
@@ -372,7 +363,7 @@ python scripts/convert_tavern_personas.py <输入文件> --convert
         "enabled": true,
         "mode": "always",
         "position": "after_char",
-        "group_weight": 50,
+        "insertion_order": 50,
         "code_block": "set_world('always_active', True)"
       }
     ]
@@ -539,8 +530,8 @@ python scripts/convert_tavern_personas.py <输入文件> --convert
 3. `prompts` → `prompts` (转换字段名)
 4. `injection_position` → `position`
 5. `injection_depth` → `depth`  
-6. `injection_order` → `group_weight`
-7. `enabled` → `enable`
+6. `injection_order` → `order`
+7. `enabled` → `enabled`
 
 ### 位置映射
 

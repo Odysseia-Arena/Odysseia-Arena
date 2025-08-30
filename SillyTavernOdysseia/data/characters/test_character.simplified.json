@@ -19,7 +19,7 @@
         "mode": "conditional",
         "position": "before_char",
         "depth": 2,
-        "group_weight": 100,
+        "order": 100,
         "probability": 100,
         "keys": ["友善", "帮助", "问题"],
         "content": "当前角色处于友善模式，会积极帮助用户。",
@@ -31,7 +31,7 @@
         "enabled": true,
         "mode": "always",
         "position": "after_char",
-        "group_weight": 50,
+        "order": 50,
         "keys": [],
         "content": "记住要保持礼貌和友善的态度。",
         "code_block": "set_world('politeness_reminder', True)"

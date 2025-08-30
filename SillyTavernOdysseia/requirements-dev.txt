@@ -1,0 +1,15 @@
+# 开发和测试依赖
+pytest>=6.0.0
+pytest-cov>=2.0.0
+
+# 文档生成（可选）
+mkdocs>=1.4.0
+mkdocs-material>=8.0.0
+
+# 代码格式化（可选）
+black>=22.0.0
+isort>=5.0.0
+
+# 代码检查（可选）
+flake8>=4.0.0
+mypy>=0.900

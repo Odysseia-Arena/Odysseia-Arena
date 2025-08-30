@@ -15,18 +15,20 @@
 ```
 SillyTavern-Odysseia/
 ├── 📚 src/                          # 核心源代码
+│   ├── api_interface.py             # 统一API接口
 │   ├── services/                    # 主要服务模块
 │   │   ├── chat_history_manager.py  # 聊天历史和宏处理
 │   │   ├── config_manager.py        # 配置组合管理
 │   │   └── conversation_manager.py  # 对话持久化
-│   └── utils/
-│       └── macro_processor.py       # 宏处理引擎
+│   └── utils/                       # 工具模块
+│       ├── unified_macro_processor.py # 统一宏处理器（作用域感知）
+│       └── python_sandbox.py        # Python沙箱
 ├── 🛠️ scripts/                     # 转换工具
 │   ├── extract_and_convert_card.py  # PNG角色卡提取
 │   └── convert_preset.py           # 预设格式转换
 ├── 💾 data/                        # 数据存储
 │   ├── presets/                    # 预设文件
-│   ├── characters/                 # 角色卡文件  
+│   ├── characters/                 # 角色卡文件
 │   ├── personas/                   # 玩家卡文件
 │   ├── world_books/                # 通用世界书
 │   ├── configs/                    # 配置组合
@@ -34,8 +36,6 @@ SillyTavern-Odysseia/
 ├── 📖 docs/                        # 文档
 │   ├── API.md                      # API参考
 │   └── MACROS.md                   # 宏系统文档
-├── 🚀 example.py                   # 使用示例
-├── 🧪 test_system.py               # 系统测试
 └── 📄 README.md                    # 主要文档
 ```
 
@@ -54,12 +54,12 @@ SillyTavern-Odysseia/
 - ✅ 配置快速切换
 - ✅ 标签和元数据支持
 
-### 3. 宏处理系统 (`MacroProcessor`)
-- ✅ 40+ 内置宏功能
-- ✅ 变量系统和持久化
-- ✅ 嵌套宏支持
-- ✅ 跨Role处理
-- ✅ 错误处理和恢复
+### 3. 统一宏处理系统 (`UnifiedMacroProcessor`)
+- ✅ **统一执行**: 所有宏都在Python沙盒中执行
+- ✅ **作用域感知**: 支持 `preset_` `world_` 等前缀变量
+- ✅ **顺序处理**: 按 `enabled` -> `code_block` -> `content` 顺序执行
+- ✅ **完全兼容**: 自动转换并支持SillyTavern传统宏
+- ✅ **错误处理**: 完整的错误处理和降级机制
 
 ### 4. 对话管理 (`ConversationManager`)
 - ✅ 对话保存和加载

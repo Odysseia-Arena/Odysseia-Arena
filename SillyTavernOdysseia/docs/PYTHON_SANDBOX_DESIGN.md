@@ -2,11 +2,12 @@
 
 ## 🎯 设计目标
 
-SillyTavern Odysseia的Python沙盒系统旨在提供：
+SillyTavern Odysseia的Python沙盒系统提供：
 - **强大的Python编程能力**：支持完整的Python语法和逻辑
 - **完全向后兼容**：无缝支持现有SillyTavern宏
 - **安全的执行环境**：严格的沙盒限制，防止恶意代码
 - **智能作用域管理**：根据上下文自动选择正确的变量作用域
+- **简洁的来源追踪**：通过`_source_types`和`_source_names`字段进行轻量级来源标记
 
 ## 🏗️ 系统架构
 
@@ -17,19 +18,19 @@ SillyTavern Odysseia的Python沙盒系统旨在提供：
 │                  Python沙盒宏系统                        │
 ├─────────────────────────────────────────────────────────┤
 │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────┐
-│  │   宏转换处理器    │  │   Python沙箱     │  │   作用域管理  │
+│  │   宏处理器       │  │   Python沙箱     │  │   来源追踪   │
 │  │                │  │                │  │             │
-│  │ • SillyTavern   │  │ • 安全执行      │  │ • 分层变量   │
-│  │   宏转换        │  │ • AST验证       │  │ • 前缀访问   │
-│  │ • Python宏执行  │  │ • 资源限制      │  │ • 函数访问   │
-│  │ • 自动检测转换   │  │ • 时间限制      │  │ • 作用域隔离 │
+│  │ • SillyTavern   │  │ • 安全执行      │  │ • 类型标记   │
+│  │   宏转换        │  │ • AST验证       │  │ • 名称追踪   │
+│  │ • Python宏执行  │  │ • 资源限制      │  │ • 简洁信息   │
+│  │ • 作用域感知     │  │ • 时间限制      │  │ • 调试辅助   │
 │  └─────────────────┘  └─────────────────┘  └─────────────┘
 ├─────────────────────────────────────────────────────────┤
 │                    执行引擎                              │
-│  • 最终提示词拼接（应用次序规则）                         │
-│  • 代码块按序执行（从上到下）                            │
+│  • 提示词构建（injection_order排序）                     │
+│  • 代码块顺序执行                                        │
 │  • 宏处理（传统+Python）                                │
-│  • 结果合并与输出                                        │
+│  • 多格式输出（raw/processed/clean）                     │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -74,19 +75,23 @@ temp_vars        = {}  # 存储基础宏变量和临时计算结果
 
 ### 作用域自动检测
 
-系统通过分析内容来源自动确定作用域：
+系统通过分析消息数据结构中附加的来源标记来精确确定作用域，而非内容猜测。
 
 ```python
-def _detect_content_scope(self, msg):
-    content = msg.get('content', '')
-    if 'worldInfoBefore' in content or 'worldInfoAfter' in content:
-        return 'world'      # 世界书内容
-    elif 'charDescription' in content:
-        return 'char'       # 角色描述
-    elif 'chatHistory' in content:
-        return 'conversation'  # 对话历史
+def _determine_primary_scope(self, source_types: List[str]) -> str:
+    """
+    根据消息的 _source_types 列表确定其主要作用域。
+    这种方法依赖于构建时附加的精确元数据，保证了作用域判断的准确性。
+    """
+    # 优先级: preset > world > conversation > temp
+    if "preset" in source_types:
+        return "preset"
+    elif "world" in source_types:
+        return "world"
+    elif "conversation" in source_types:
+        return "conversation"
     else:
-        return 'preset'     # 默认预设作用域
+        return "temp"
 ```
 
 ## 🛡️ 安全沙盒
@@ -252,82 +257,90 @@ def _collect_code_blocks_from_sources(self) -> List[Dict[str, Any]]:
 
 ## 🎭 执行流程
 
-### 多内容部分架构流程
+### 简化的执行流程
 
 ```python
-def to_final_prompt_openai(self, execute_code: bool = True) -> List[Dict[str, str]]:
-    # 1. 构建最终提示词（保持多内容部分结构）
-    final_prompt = self.build_final_prompt()
+def build_final_prompt(self) -> List[Dict[str, str]]:
+    # 1. 构建最终提示词（统一排序和处理）
+    return self.prompt_builder.build_final_prompt(
+        chat_history=self.chat_history,
+        world_book_entries=self.world_book_entries,
+        preset_prompts=self.preset_prompts,
+        triggered_entries=self.triggered_entries
+    )
+
+def to_clean_openai_format(self) -> List[Dict[str, str]]:
+    # 2. 获取标准OpenAI格式（无来源信息）
+    processed_messages = self.build_final_prompt()
     
-    # 2. 转换为扩展OpenAI格式（保留content_parts信息）
-    openai_messages = []
-    for message in final_prompt:
-        openai_msg = message.to_openai_format()  # 包含_content_parts字段
-        openai_messages.append(openai_msg)
+    clean_messages = []
+    for msg in processed_messages:
+        clean_msg = {
+            "role": msg["role"],
+            "content": msg["content"]
+        }
+        clean_messages.append(clean_msg)
     
-    # 3. 执行代码和宏处理（精确作用域感知）
-    if execute_code:
-        openai_messages = self._execute_code_blocks_sequential(openai_messages)
-    
-    return openai_messages
+    return clean_messages
 ```
 
-### 关键架构改进
+### 核心设计原则
 
-#### 1. 延迟合并策略
-- **构建阶段**: ChatMessage包含多个ContentPart，每个保持来源标记
-- **处理阶段**: 保持content_parts结构，不过早合并
-- **输出阶段**: 只在最终输出时用双换行符合并
+#### 1. 简洁的来源追踪
+- **类型标记**: `_source_types` 标识内容来源类型（preset/world/conversation等）
+- **名称标记**: `_source_names` 仅对预设和世界书提供有意义的名称
+- **三种格式**: raw（调试）、processed（分析）、clean（API调用）
 
-#### 2. 精确作用域映射
+#### 2. 作用域感知处理
 ```python
-# 每个ContentPart的宏使用其source_type作用域
-for part in message["_content_parts"]:
-    part_content = part["content"]
-    part_scope = part["source_type"]  # preset/char/world/conversation
+# 根据消息来源确定作用域
+def determine_scope(message):
+    source_types = message.get("_source_types", [])
     
-    # 宏处理使用精确作用域
-    processed_content = process_macros(part_content, scope=part_scope)
+    if "preset" in source_types:
+        return "preset"
+    elif "world" in source_types:
+        return "world"
+    elif "conversation" in source_types:
+        return "conversation"
+    else:
+        return "temp"
+
+# 宏处理使用确定的作用域
+scope = determine_scope(msg)
+processed_content = self.macro_manager.process_string(content, scope)
 ```
 
-### 宏和代码处理（多内容部分架构）
+### 宏和代码处理流程
 
 ```python
-def _execute_code_blocks_sequential(self, openai_messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    # 1. 先执行所有代码块
-    self.execute_all_code_blocks_sequential()
+def _process_message_macros(self, messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    # 处理每条消息中的宏（作用域感知）
+    for msg in messages:
+        # 1. 确定消息的主要作用域
+        source_types = msg.get("_source_types", [])
+        scope = self._determine_primary_scope(source_types)
+        
+        # 2. 处理传统宏和Python宏
+        content = msg["content"]
+        content = self.macro_manager.process_string(content, scope)
+        
+        # 3. 更新消息内容
+        msg["content"] = content
     
-    # 2. 处理每条消息中的宏（精确作用域感知）
-    for msg in openai_messages:
-        if "_content_parts" in msg and msg["_content_parts"]:
-            # 新架构：分别处理每个内容部分
-            processed_parts = []
-            
-            for part in msg["_content_parts"]:
-                part_content = part["content"]
-                part_scope = part["source_type"]  # 使用该部分的精确作用域
-                
-                # 2.1 传统宏处理
-                part_content = self._macro_processor.process_macros(part_content)
-                
-                # 2.2 Python宏处理（使用该部分的作用域）
-                part_content = self._process_python_macros(part_content, part_scope)
-                
-                # 2.3 内联Python代码块处理
-                part_content = self._execute_python_blocks_in_content(part_content, sandbox)
-                
-                processed_parts.append(part_content)
-            
-            # 最终拼接：用双换行符合并
-            msg["content"] = "\n\n".join(processed_parts)
-        else:
-            # 向后兼容：单一内容消息
-            scope_type = self._detect_content_scope(msg)
-            msg["content"] = self._macro_processor.process_macros(msg["content"])
-            msg["content"] = self._process_python_macros(msg["content"], scope_type)
-            msg["content"] = self._execute_python_blocks_in_content(msg["content"], sandbox)
-    
-    return openai_messages
+    return messages
+
+def _determine_primary_scope(self, source_types: List[str]) -> str:
+    """确定消息的主要作用域"""
+    # 优先级: preset > world > conversation > temp
+    if "preset" in source_types:
+        return "preset"
+    elif "world" in source_types:
+        return "world" 
+    elif "conversation" in source_types:
+        return "conversation"
+    else:
+        return "temp"
 ```
 
 ## 📊 变量管理

@@ -190,8 +190,15 @@ class ConfigManager:
             with open(preset_path, "r", encoding="utf-8") as f:
                 preset_data = json.load(f)
         
+        # 加载玩家卡数据
+        persona_data = {}
+        if "persona" in config.components:
+            persona_path = self.personas_dir / config.components["persona"]
+            with open(persona_path, "r", encoding="utf-8") as f:
+                persona_data = json.load(f)
+
         # 创建基础管理器
-        manager = create_chat_manager(character_data, preset_data)
+        manager = create_chat_manager(character_data, preset_data, persona_data)
         
         # 加载通用世界书（如果有）
         if "additional_world_book" in config.components:
@@ -201,13 +208,6 @@ class ConfigManager:
             
             # 合并通用世界书到管理器
             self._merge_additional_world_book(manager, world_book_data)
-        
-        # 加载玩家卡信息（存储到manager中，用于personaDescription）
-        if "persona" in config.components:
-            persona_path = self.personas_dir / config.components["persona"]
-            with open(persona_path, "r", encoding="utf-8") as f:
-                persona_data = json.load(f)
-            manager.persona_data = persona_data
         
         return manager
     
@@ -232,12 +232,8 @@ class ConfigManager:
             entry_data["id"] = max_id
             
             from .chat_history_manager import WorldBookEntry
-            # 提取排序字段：优先使用insertion_order，其次是extensions中的position，最后是默认值
-            order = entry_data.get("insertion_order")
-            if order is None and "extensions" in entry_data:
-                order = entry_data["extensions"].get("position")
-            if order is None:
-                order = 100
+            # 提取排序字段：优先使用insertion_order，最后是默认值
+            order = entry_data.get("insertion_order", 100)
             
             # 提取enabled表达式
             enabled_expr = entry_data.get("enabled", True)
