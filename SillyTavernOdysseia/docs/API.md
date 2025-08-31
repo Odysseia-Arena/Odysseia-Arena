@@ -7,7 +7,7 @@
 本项目实现了一个统一的Python API接口，封装了完整的聊天系统功能。系统核心功能已实现，但仍在持续迭代和重构以提升代码质量和可维护性。
 
 - ✅ **🌟 新：JSON输入接口**：支持OpenAI格式的完整对话历史输入
-- ✅ **🌟 新：三种输出格式**：raw（调试）、processed（分析）、clean（API调用）
+- ✅ **🌟 新：六种输出格式**：原始三种（raw、processed、clean）及其应用正则后的对应格式
 - ✅ **🌟 新：前缀变量访问**：`world_var`、`preset_var` 等跨作用域访问
 - ✅ **🌟 新：统一执行顺序**：单遍按词条处理，确保变量依赖正确
 - ✅ **输入接口**：处理配置ID、对话历史，返回最终提示词
@@ -17,160 +17,82 @@
 - ✅ **Python宏支持**：通过安全的沙盒环境，健壮地支持Python代码执行和宏处理
 - ✅ **对话管理**：自动保存和加载对话历史
 
-## 🎯 **核心特性**
+## 💡 **核心概念**
 
-### 1. **统一API接口**
-- 简洁的函数调用：`chat(session_id, config_id, user_input)`
-- 完整的配置管理：预设+角色卡+玩家卡+世界书组合
-- 自动会话管理：对话历史自动保存和加载
+在深入了解API之前，请先熟悉以下几个核心设计理念，它们是理解本系统强大功能的关键：
 
-### 2. **Python宏系统**
-- **强大的执行能力**: 支持大部分Python表达式，包括计算、字符串处理、条件逻辑和变量操作。
-- **安全沙盒执行**: 所有代码在受限的沙盒环境中执行，内置函数和模块经过安全审查，以防止恶意代码。
-- **统一作用域管理**: 变量在`preset`、`char`、`world`等不同作用域中正确隔离，并支持通过前缀进行跨作用域访问。
+1.  **统一执行顺序 (Unified Execution Order)**
+    - **是什么**: 系统采用单遍、按 `injection_order` 排序的执行模型。所有内容来源（预设、世界书、聊天历史）会先合并排序，然后从上到下逐条处理。
+    - **为什么**: 这种设计确保了变量依赖关系的正确性。例如，排序在前的条目通过 `code_block` 设置了一个变量，排序在后的条目可以立即在其 `enabled` 字段或 `content` 中使用这个变量。这使得复杂的、有状态的逻辑构建成为可能。
 
-### 3. **智能内容处理**
-- 世界书条件触发：根据关键词自动插入相关内容
-- 宏变量替换：支持传统宏和Python宏混合使用
-- 多内容部分架构：保持来源追踪和作用域隔离
+2.  **作用域感知变量 (Scope-Aware Variables)**
+    - **是什么**: 变量根据其来源（预设、角色卡、世界书等）存储在不同的作用域中。系统通过前缀（如 `world_status`, `preset_config`）或上下文自动识别并访问正确作用域的变量。
+    - **为什么**: 实现了清晰的变量隔离和管理。系统配置、角色状态、世界环境等信息互不干扰，同时又提供了灵活的跨作用域访问能力，使宏和代码逻辑更健壮、更易于维护。
 
-**系统核心功能已实现，但建议在部署到生产环境前进行充分测试。**
+3.  **多视图输出 (Multi-View Output)**
+    - **是什么**: API可以一次性返回三种不同格式的提示词：`raw` (原始)、`processed` (处理后) 和 `clean` (纯净)。
+    - **为什么**: 满足不同应用场景的需求。`raw` 视图用于深度调试；`processed` 视图保留了来源信息，适合前端展示或分析；`clean` 视图是标准的OpenAI格式，可直接用于调用语言模型API。此外，正则规则还可以针对不同视图进行操作，实现更精细的控制。
 
-## 核心API
+## 🚀 **核心API：高级接口（推荐）**
 
-### ConfigManager
+我们强烈推荐使用 `ChatAPI` 提供的 `chat_input_json` 方法作为与系统交互的主要方式。它封装了所有底层复杂性，提供了最强大和最灵活的功能。
 
-配置管理器，负责管理聊天配置组合。
+### 快速开始
 
-#### 初始化
+下面的示例展示了如何使用推荐的JSON接口与系统进行一次完整的交互：
+
 ```python
-from src.services.config_manager import create_config_manager
+from src.api_interface import create_chat_api, ChatRequest
 
-config_manager = create_config_manager(data_root="data")
-```
-
-#### 主要方法
-
-##### create_config()
-创建新的聊天配置
-```python
-config = config_manager.create_config(
-    config_id="my_config",
-    name="我的配置", 
-    description="配置描述",
-    preset_file="preset.simplified.json",      # 可选
-    character_file="character.simplified.json", # 可选
-    persona_file="persona.json",               # 可选
-    additional_world_book="world.json",        # 可选
-    tags=["tag1", "tag2"]                      # 可选
-)
-```
-
-##### save_config() / load_config()
-保存和加载配置
-```python
-config_manager.save_config(config)
-loaded_config = config_manager.load_config("my_config")
-```
-
-##### set_current_config()
-设置当前活动配置
-```python
-config_manager.set_current_config(config)
-manager = config_manager.get_current_manager()
-```
-
-### ChatHistoryManager
-
-聊天历史管理器，负责管理对话和宏处理。
-
-#### 初始化
-```python
-from src.services.chat_history_manager import create_chat_manager
-
-manager = create_chat_manager(character_data, preset_data)
-```
-
-#### 主要方法
-
-##### 添加消息
-```python
-manager.add_user_message("用户消息")
-manager.add_assistant_message("助手回复")
-```
-
-##### 获取消息
-```python
-# 获取聊天历史（OpenAI格式）
-messages = [msg.to_openai_format() for msg in manager.chat_history]
-
-# 获取最终提示词（包含预设和宏处理）
-final_prompt = manager.build_final_prompt()
-
-# 获取不同格式的提示词
-raw_prompt = manager.to_raw_openai_format()
-processed_prompt = manager.to_processed_openai_format()
-clean_prompt = manager.to_clean_openai_format()
-```
-
-##### 宏和代码执行
-```python
-# 启用/禁用宏处理
-manager.enable_macros = True/False
-
-# 执行所有代码块
-result = manager.execute_all_code_blocks_sequential()
-print(result["success"])
-print(result["results"])
-print(result["final_variables"])
-
-# 获取当前变量状态
-variables = manager._macro_processor.get_all_variables() if manager._macro_processor else {}
-```
-
-### 🎉 **统一API接口（推荐使用）**
-
-简化的Python函数接口，封装完整功能，**支持SillyTavern用户角色转换**：
-
-#### 快速开始
-```python
-from src.api_interface import create_chat_api, chat, ChatRequest
-
-# 创建API实例
+# 1. 创建API实例
 api = create_chat_api(data_root="data")
 
-# 🌟 新推荐：JSON输入格式（支持完整对话历史）
+# 2. 构造请求（推荐使用JSON格式）
+# 这是一个包含完整对话历史的请求
 conversation_request = {
-    "session_id": "session_001",
-    "config_id": "test_config",
+    "session_id": "user_session_123",
+    "config_id": "your_config_id",  # 替换为你的配置ID
     "input": [
-        {"role": "user", "content": "你好"},
-        {"role": "assistant", "content": "你好！有什么可以帮助你的吗？"},
-        {"role": "user", "content": "请介绍一下你自己"}
+        {"role": "user", "content": "你好，我想了解一下Python宏。"},
+        {"role": "assistant", "content": "当然！Python宏非常强大。你可以使用 {{python:1+1}} 来执行简单的计算。"},
+        {"role": "user", "content": "太酷了！那如何设置和获取变量呢？比如，设置一个名为'hp'的变量为100。"}
     ],
-    "output_formats": ["clean"]  # 获取标准OpenAI格式，直接用于AI API调用
+    "output_formats": ["clean", "processed"]  # 请求获取纯净格式和处理后格式
 }
 
+# 3. 发送请求并获取响应
 response = api.chat_input_json(conversation_request)
-print("最终提示词（可直接用于AI API）:", response.clean_prompt)
 
-# 获取角色卡消息（无输入对话）
-character_request = {
-    "session_id": "session_002", 
-    "config_id": "test_config",
-    "input": None,  # 无对话历史，返回角色卡消息
-    "output_formats": ["processed"]
+# 4. 使用响应结果
+# 4.1. clean_prompt: 直接用于调用语言模型API
+print("✅ Clean Prompt (用于AI API调用):")
+print(response.clean_prompt)
+# >>> [{'role': 'user', 'content': '你好...'}, {'role': 'assistant', 'content': '当然...'}, ...]
+
+# 4.2. processed_prompt: 用于前端展示或调试，保留了来源信息
+print("\n✅ Processed Prompt (用于分析和调试):")
+for message in response.processed_prompt:
+    source_types = message.get('_source_types', [])
+    print(f"  - Role: {message['role']}, Sources: {source_types}")
+    print(f"    Content: {message['content'][:80]}...") # 打印部分内容
+
+# 5. 获取角色欢迎语（无输入历史）
+# 当 "input" 字段为 null 或不提供时，API会返回角色卡的欢迎消息
+welcome_request = {
+    "session_id": "user_session_456",
+    "config_id": "your_config_id",
+    "input": None
 }
+welcome_response = api.chat_input_json(welcome_request)
+if welcome_response.is_character_message:
+    print("\n✅ 角色欢迎语:")
+    print(welcome_response.character_messages)
 
-response = api.chat_input_json(character_request)
-print("角色卡消息:", response.character_messages)
-
-# 📋 向后兼容：传统接口仍然可用
-response = api.chat_input(session_id="session_001", config_id="test_config", user_input="你好！")
-print("传统方式最终提示词:", response.final_prompt)
-
-# 直接函数调用
-response = chat(session_id="session_001", config_id="test_config", user_input="你好！")
+# 6. (向后兼容) 传统接口
+# 尽管仍然可用，但功能有限，推荐迁移到JSON接口
+legacy_response = api.chat_input(session_id="legacy_session", config_id="your_config_id", user_input="你好！")
+print("\n✅ 传统接口响应 (processed_prompt):")
+print(legacy_response.final_prompt)
 ```
 
 #### 接口定义
@@ -199,9 +121,14 @@ def chat_input_json(request_data: Union[str, Dict[str, Any], ChatRequest]) -> Ch
 - `config_id`: 配置ID，指定使用的预设、角色卡、额外世界书配置
 - `input`: OpenAI格式的消息数组（完整对话历史）。如果为None，则返回角色卡的message字段内容
 - `output_formats`: 指定需要的输出格式列表：
-  - `"raw"`: 未经enabled判断的原始提示词（调试用）
-  - `"processed"`: 已处理但保留来源信息（分析用）
-  - `"clean"`: 标准OpenAI格式（API调用用，**推荐**）
+  - **基础格式（未应用正则）:**
+    - `"raw"`: 未经enabled判断的原始提示词（全量调试用）
+    - `"processed"`: 已处理但保留来源信息（分析用）
+    - `"clean"`: 标准OpenAI格式（API调用用）
+  - **应用正则后的格式:**
+    - `"raw_with_regex"`: 原始提示词+正则（含正则调试用）
+    - `"processed_with_regex"`: 已处理提示词+正则（带元数据，用户视图）
+    - `"clean_with_regex"`: 标准格式+正则（API调用用，**推荐**）
 
 ##### 向后兼容：传统输入接口
 ```python
@@ -220,13 +147,19 @@ def chat_input(session_id: str, config_id: str, user_input: Optional[str] = None
 class ChatResponse:
     source_id: str                              # 来源ID
     
-    # 🌟 三种不同的OpenAI格式输出
+    # 🌟 六种不同的OpenAI格式输出
+    # 基础三种格式 (未应用正则)
     raw_prompt: Optional[List[Dict[str, Any]]] = None      # 格式1: 未经enabled判断的原始提示词
     processed_prompt: Optional[List[Dict[str, Any]]] = None # 格式2: 已处理但保留来源信息
-    clean_prompt: Optional[List[Dict[str, str]]] = None     # 格式3: 标准OpenAI格式（推荐）
+    clean_prompt: Optional[List[Dict[str, str]]] = None     # 格式3: 标准OpenAI格式
+    
+    # 应用正则后的三种格式
+    raw_prompt_with_regex: Optional[List[Dict[str, Any]]] = None      # 格式4: 原始提示词+正则
+    processed_prompt_with_regex: Optional[List[Dict[str, Any]]] = None # 格式5: 已处理提示词+正则
+    clean_prompt_with_regex: Optional[List[Dict[str, str]]] = None     # 格式6: 标准格式+正则（推荐）
     
     # 向后兼容字段
-    final_prompt: Optional[List[Dict[str, Any]]] = None     # 指向processed_prompt的别名
+    final_prompt: Optional[List[Dict[str, Any]]] = None     # 现在指向processed_prompt_with_regex
     
     is_character_message: bool = False          # 是否为角色卡消息
     character_messages: Optional[List[str]] = None  # 角色卡的所有message（当无用户输入时）
@@ -234,70 +167,77 @@ class ChatResponse:
     request: Optional[ChatRequest] = None       # 原始请求信息
 ```
 
-#### 🌟 **三种输出格式与正则视图**
+#### 🌟 **六种输出格式与正则视图系统**
 
 ##### 格式对比
 
-| 格式 | 用途 | 特点 | 推荐场景 |
-|------|------|------|----------|
-| **raw** | 调试分析 | 包含所有条目，未经enabled过滤 | 完整视图、调试问题 |
-| **processed** | 来源追踪 | 已处理但保留_source_types和_source_names信息 | 分析处理流程、追踪来源 |
-| **clean** | API调用 | 纯OpenAI格式，只包含role和content | 直接调用AI API（**推荐**） |
+| 格式 | 应用正则 | 用途 | 特点 | 推荐场景 |
+|------|---------|------|------|----------|
+| **raw** | ❌ | 调试分析 | 包含所有条目，未经enabled过滤 | 完整视图、调试问题 |
+| **processed** | ❌ | 来源追踪 | 已处理但保留_source_types和_source_names信息 | 分析处理流程、追踪来源 |
+| **clean** | ❌ | API调用 | 纯OpenAI格式，只包含role和content | 原始API调用 |
+| **raw_with_regex** | ✅ | 调试分析 | 应用正则后的原始提示词 | 调试正则效果 |
+| **processed_with_regex** | ✅ | 用户视图 | 应用正则后的处理提示词，保留元数据 | UI渲染、用户显示 |
+| **clean_with_regex** | ✅ | API调用 | 应用正则后的纯OpenAI格式 | 最终AI API调用（**推荐**） |
 
 ##### 正则规则视图系统
 
-系统支持对不同视图应用不同的正则规则，通过规则的 `views` 字段控制。
+系统支持对不同视图应用不同的正则规则，通过规则的 `views` 字段控制。每种基础格式都有对应的应用正则版本。
 
-| 视图类型 | 作用范围 | 对应API输出 | 使用场景 |
-|---------|---------|------------|----------|
-| **original** | 修改原始提示词 | 影响所有视图 | 需要实际修改提示词内容 |
-| **user_view** | 只修改用户看到的提示词 | 影响 processed_prompt | 对用户隐藏敏感信息 |
-| **assistant_view** | 只修改AI模型看到的提示词 | 影响 clean_prompt | 对AI模型增强或简化指令 |
+| 视图 | 对应基础API输出 | 对应应用正则API输出 | 用途 |
+| :--- | :--- | :--- | :--- |
+| **`raw_view`** | `raw_prompt` | `raw_prompt_with_regex` | **面向调试**。此视图包含原始的未过滤内容，适合深度调试。 |
+| **`user_view`** | `processed_prompt` | `processed_prompt_with_regex` | **面向用户展示**。此视图包含 `_source_types` 等元数据，适合在UI中渲染，同时可以通过正则规则隐藏敏感信息或优化格式。 |
+| **`assistant_view`** | `clean_prompt` | `clean_prompt_with_regex` | **面向AI模型**。此视图是纯净的OpenAI格式，可以通过正则规则为其添加秘密指令或简化内容，而不影响用户看到的内容。 |
 
 **注意**: `views` 字段与 `placement` 字段完全不同：
 - `placement` 决定规则应用的**时机**（宏处理前或后）
 - `views` 决定规则应用的**效果**（影响哪些输出视图）
 
+##### `views` 字段行为
+
+`views` 字段是一个数组，用于精确控制规则应用于哪个输出视图。其行为如下：
+
+-   **`"views": ["raw_view"]`**: 规则**只**应用于原始视图 (`raw_prompt` → `raw_prompt_with_regex`)。
+-   **`"views": ["user_view"]`**: 规则**只**应用于用户视图 (`processed_prompt` → `processed_prompt_with_regex`)。
+-   **`"views": ["assistant_view"]`**: 规则**只**应用于AI视图 (`clean_prompt` → `clean_prompt_with_regex`)。
+-   **`"views": ["user_view", "assistant_view"]`**: 规则**同时**应用于用户视图和AI视图。
+-   **`"views": ["raw_view", "user_view", "assistant_view"]`**: 规则**同时**应用于所有视图。
+-   **`views` 字段未设置或为空数组 `[]`**: **规则无效**。必须显式指定至少一个视图才能使规则生效。
+
+**重要**: 正则规则**不会**修改原始的、经过宏处理后的提示词数据。系统会为每种视图创建独立的副本，然后分别应用相应的正则规则，确保了底层数据的不可变性和视图间的独立性。
+
 ##### 正则视图示例
 
 ```json
-// 示例1：为AI模型提供额外指令，但对用户隐藏
+// 示例1: 同时影响用户和AI视图
 {
-  "id": "ai_instruction",
-  "name": "AI模型指令增强",
-  "enabled": true,
+  "id": "format_q_and_a",
+  "name": "格式化问答",
+  "find_regex": "问：(.*?)\\n答：(.*)",
+  "replace_regex": "### 提问\n$1\n\n### 回答\n$2",
+  "placement": "after_macro",
+  "views": ["user_view", "assistant_view"]
+}
+
+// 示例2: 仅为AI添加指令
+{
+  "id": "ai_secret_instruction",
+  "name": "AI秘密指令",
   "find_regex": "^(.*?)$",
-  "replace_regex": "$1\n\n[注意：请在回复中使用详细的代码示例]",
-  "targets": ["assistant_response"],
+  "replace_regex": "$1\n\n[系统指令：请保持礼貌]",
   "placement": "after_macro",
-  "views": ["assistant_view"],
-  "description": "向AI发送的提示词中添加额外指令，但在用户界面中不显示"
+  "views": ["assistant_view"]
 }
 
-// 示例2：对用户隐藏敏感信息
+// 示例3: 仅为用户隐藏信息
 {
-  "id": "hide_sensitive",
-  "name": "隐藏敏感信息",
-  "enabled": true,
-  "find_regex": "(银行卡号|密码|手机号)：\\s*([\\d\\w]+)",
-  "replace_regex": "$1：[已隐藏]",
-  "targets": ["user", "assistant_response"],
+  "id": "hide_internal_vars",
+  "name": "为用户隐藏内部变量",
+  "find_regex": "\\[debug_info:.*?\\]",
+  "replace_regex": "[调试信息已隐藏]",
   "placement": "after_macro",
-  "views": ["user_view"],
-  "description": "在用户界面中隐藏敏感信息，但AI仍能看到"
-}
-
-// 示例3：修改所有视图（实际修改底层数据）
-{
-  "id": "format_all",
-  "name": "格式化所有视图",
-  "enabled": true,
-  "find_regex": "问题：(.*?)\\n回答：(.*)",
-  "replace_regex": "### 问题\n$1\n\n### 回答\n$2",
-  "targets": ["user", "assistant_response"],
-  "placement": "after_macro",
-  "views": ["original"],
-  "description": "格式化问答内容，修改所有视图"
+  "views": ["user_view"]
 }
 ```
 
@@ -309,149 +249,58 @@ class ChatResponse:
 ##### 使用示例
 
 ```python
-# 请求三种格式
+# 请求六种格式
 request = {
     "session_id": "demo",
-    "config_id": "test", 
+    "config_id": "test",
     "input": [{"role": "user", "content": "你好"}],
-    "output_formats": ["raw", "processed", "clean"]
+    "output_formats": [
+        "raw", "processed", "clean",
+        "raw_with_regex", "processed_with_regex", "clean_with_regex"
+    ]
 }
 
 response = api.chat_input_json(request)
 
-# 1. 原始格式 - 调试用
+# 1. 基础格式（未应用正则）
+## 1.1 原始格式 - 调试用
 print("原始格式（包含禁用条目）:")
 for msg in response.raw_prompt:
     print(f"  {msg['role']}: {msg['content']}")
 
-# 2. 已处理格式 - 分析用  
+## 1.2 已处理格式 - 分析用
 print("已处理格式（保留来源信息）:")
 for msg in response.processed_prompt:
     sources = msg.get('_source_types', [])
     print(f"  {msg['role']} (来源: {sources}): {msg['content']}")
 
-# 3. 标准格式 - API调用用（推荐）
+## 1.3 标准格式 - API调用用
 print("标准OpenAI格式:")
-clean_messages = response.clean_prompt
+for msg in response.clean_prompt:
+    print(f"  {msg['role']}: {msg['content']}")
+
+# 2. 应用正则后的格式
+## 2.1 原始格式+正则 - 正则调试用
+print("原始格式+正则:")
+for msg in response.raw_prompt_with_regex:
+    print(f"  {msg['role']}: {msg['content']}")
+
+## 2.2 已处理格式+正则 - 用户视图
+print("已处理格式+正则（用户视图）:")
+for msg in response.processed_prompt_with_regex:
+    sources = msg.get('_source_types', [])
+    print(f"  {msg['role']} (来源: {sources}): {msg['content']}")
+
+## 2.3 标准格式+正则 - API调用用（推荐）
+print("标准OpenAI格式+正则（推荐）:")
+clean_messages = response.clean_prompt_with_regex
 
 # 直接用于OpenAI API调用
-import openai
-openai_response = openai.ChatCompletion.create(
-    model="gpt-3.5-turbo",
-    messages=clean_messages  # 直接使用，无需转换
-)
-```
-
-#### Python宏功能示例
-
-##### ✅ **支持的Python宏功能**
-
-1. **基础计算**：
-   ```python
-   {{python:15 + 10}}  # 输出: 25
-   {{python:3.14 * 2}} # 输出: 6.28
-   ```
-
-2. **字符串操作**：
-   ```python
-   {{python:'Hello' + ' ' + 'World'}}  # 输出: Hello World
-   {{python:'测试'.upper()}}           # 输出: 测试
-   ```
-
-3. **变量管理**：
-   ```python
-   {{python:setvar('hp', 100)}}        # 设置变量
-   {{python:getvar('hp')}}             # 获取变量，输出: 100
-   ```
-
-4. **类型转换**：
-   ```python
-   {{python:int('42')}}                # 输出: 42
-   {{python:str(123)}}                 # 输出: 123
-   {{python:float('3.14')}}            # 输出: 3.14
-   ```
-
-5. **条件判断**：
-   ```python
-   {{python:'优秀' if int(getvar('score')) >= 90 else '良好'}}
-   {{python:'是' if True else '否'}}
-   ```
-
-6. **复杂计算**：
-   ```python
-   {{python:100 - int(getvar('hp'))}}  # 变量计算
-   {{python:max(10, 20, 30)}}          # 内置函数
-   ```
-
-##### 🔧 **实际使用示例**
-```python
-from src.api_interface import create_chat_api
-
-api = create_chat_api()
-
-# 包含Python宏的用户输入
-response = api.chat_input(
-    session_id="demo_001",
-    config_id="test_config",
-    user_input="计算结果: {{python:15 + 25}}, 设置HP: {{python:setvar('hp', 100)}}"
-)
-
-# 系统会自动处理Python宏，最终提示词中会显示:
-# "计算结果: 40, 设置HP: "
-print(response.final_prompt)
-```
-
-##### 世界书和预设管理
-```python
-# 加载世界书
-manager.load_world_book(world_book_data)
-
-# 加载预设
-manager.load_presets(preset_data)
-
-# 检查条件世界书
-manager._check_conditional_world_book("用户输入")
-```
-
-### ConversationManager
-
-对话管理器，负责对话的持久化存储。
-
-#### 初始化
-```python
-from src.services.conversation_manager import create_conversation_manager
-
-conv_manager = create_conversation_manager(data_root="data")
-```
-
-#### 主要方法
-
-##### 保存对话
-```python
-conv_manager.save_conversation(
-    conversation_id="conv_001",
-    manager=chat_manager,
-    config_id="my_config", 
-    title="对话标题",
-    tags=["tag1"]
-)
-```
-
-##### 加载对话
-```python
-success = conv_manager.load_conversation("conv_001", chat_manager)
-```
-
-##### 管理对话
-```python
-# 列出所有对话
-conversations = conv_manager.list_conversations(include_archived=False)
-
-# 归档对话
-conv_manager.archive_conversation("conv_001")
-
-# 删除对话
-conv_manager.delete_conversation("conv_001", archived=False)
+# import openai
+# openai_response = openai.ChatCompletion.create(
+#     model="gpt-3.5-turbo",
+#     messages=clean_messages  # 直接使用，无需转换
+# )
 ```
 
 ## 宏系统API
@@ -492,42 +341,36 @@ conv_manager.delete_conversation("conv_001", archived=False)
 
 ### Python宏系统
 
-#### Python代码执行
-- `{{python:code}}` - 执行Python代码并返回结果
+系统通过 `{{python:...}}` 语法提供了完整的Python代码执行能力。所有代码都在一个安全沙盒中运行，并能完全访问**作用域感知变量**。
+
+#### 语法示例
 
 ```python
 # 基础计算
-{{python:2 + 3}}  # 输出: 5
+{{python:100 - int(getvar('hp'))}}
 
 # 字符串操作
-{{python:'Hello ' + char}}  # 输出: Hello 角色名
+{{python:f"你好, {char}！"}}
 
-# 条件判断
-{{python:'是' if len(chat_history) > 0 else '否'}}
+# 条件逻辑
+{{python:"'状态: 健康' if getvar('hp') > 50 else '状态: 受伤'"}}
 
-# 变量操作
-{{python:setvar('level', 5)}}
-{{python:getvar('level')}}
+# 变量操作（作用域感知）
+{{python:setvar('mood', '开心')}}          # 设置变量到当前条目的作用域
+{{python:getvar('mood')}}                  # 从当前作用域读取
+
+# 跨作用域变量访问（使用前缀）
+{{python:setvar('world_event', '日落')}}   # 强制设置到 world 作用域
+{{python:getvar('preset_difficulty')}}     # 从 preset 作用域读取
 ```
 
-#### 🌟 **跨作用域变量访问（基于前缀）**
+#### 🌟 **跨作用域变量访问**
 
-通过变量名前缀实现跨作用域访问，设计简洁而强大：
+这是Python宏最强大的功能之一。你可以通过**变量前缀**来精确地读写不同作用域的数据。
 
 ##### 变量命名规则
-- **无前缀**: 使用当前词条的作用域
-- **有前缀**: 自动路由到对应作用域
-
-```python
-# 当前作用域访问（无前缀）
-{{python:setvar('status', '正常')}}     # 设置到当前作用域
-{{python:getvar('status')}}             # 从当前作用域读取
-
-# 跨作用域访问（有前缀）
-{{python:setvar('world_status', '正常')}}    # 设置到世界书作用域
-{{python:getvar('preset_config', '默认')}}   # 从预设作用域读取
-{{python:setvar('char_mood', '开心')}}       # 设置到角色作用域
-```
+- **无前缀** (`my_var`): 宏将根据其所在的条目来源（预设、世界书等）自动选择正确的作用域。
+- **有前缀** (`world_my_var`): 宏将**强制**在指定的作用域（本例中为 `world`）中读写变量。
 
 ##### 支持的前缀
 - `world_` → 世界书作用域
@@ -549,23 +392,30 @@ conv_manager.delete_conversation("conv_001", archived=False)
 {{python:getvar('char_emotion', 'neutral')}}  # 其他作用域访问
 ```
 
-### 代码块系统
+### 代码块系统 (`code_block`)
 
-#### 文件格式扩展
-在JSON文件中添加`code_block`字段：
+`code_block` 是一个可以添加到预设或世界书条目中的特殊字段，用于在提示词构建过程中执行Python代码。
 
+#### 执行时机
+
+`code_block` 的执行时机严格遵循**统一执行顺序**：
+1.  首先，评估条目的 `enabled` 字段。
+2.  如果 `enabled` 为 `True`，**然后**执行该条目的 `code_block`。
+3.  最后，处理该条目的 `content` 字段中的宏。
+
+这种设计确保了 `code_block` 可以设置或修改变量，供后续（按 `injection_order` 排序）的条目在其 `enabled` 或 `content` 中使用。
+
+#### 示例
 ```json
 {
-  "id": 1,
-  "name": "预设名称",
-  "content": "预设内容",
-  "code_block": "print('预设代码执行'); set_preset('init', True)"
+  "name": "战斗初始化模块",
+  "injection_order": 150,
+  "enabled": "{{python:getvar('in_combat') == True}}",
+  "code_block": "setvar('turn', 1); setvar('enemy_hp', 200)",
+  "content": "战斗开始！当前是第 {{python:getvar('turn')}} 回合。"
 }
 ```
-
-#### 🌟 **统一执行顺序（单遍，按词条处理）**
-
-**核心理念：** 按 `injection_order` 排序，逐词条完整处理（enabled → code_block → content），确保变量依赖正确工作。
+在这个示例中，只有当 `in_combat` 变量为 `True` 时，这个条目才会被激活。激活后，它会首先执行 `code_block` 来设置 `turn` 和 `enemy_hp` 变量，然后 `content` 中的宏才能正确地获取到 `turn` 的值。
 
 **执行流程：**
 
@@ -598,40 +448,84 @@ conv_manager.delete_conversation("conv_001", archived=False)
 - ✅ **enabled实时**: enabled字段总是使用最新的变量状态评估
 - ✅ **严格顺序**: 严格按 `injection_order` 确定的顺序执行
 
-### ⚡ **enabled字段执行机制**
+### ⚡ **enabled 字段的强大之处**
 
-`enabled`字段是控制条目是否被包含的关键机制，支持动态计算：
+`enabled` 字段是本系统实现动态和有状态提示词的核心机制。它不仅仅是一个简单的布尔开关，而是一个可以动态计算的表达式。
 
-#### 支持的enabled值类型：
-- **布尔值**: `true` / `false` - 静态启用/禁用
-- **宏语法**: `"{{getvar::player_level}}"` - 传统宏
-- **Python表达式**: `"{{python:getvar('level') >= 10}}"` - Python条件判断
-- **简化Python**: `"getvar('ready') == 'true'"` - 自动包装为Python宏
+#### `enabled` 支持的格式
 
-#### 执行时机和依赖：
+| 类型 | 示例 | 说明 |
+| :--- | :--- | :--- |
+| **布尔值** | `"enabled": true` | 最简单的静态启用/禁用。 |
+| **宏语法** | `"enabled": "{{getvar::debug_mode}}"` | 使用传统宏获取变量来判断。 |
+| **Python表达式** | `"enabled": "{{python:getvar('level') >= 10}}"` | **（推荐）** 使用完整的Python表达式进行复杂的逻辑判断。 |
+| **简化Python** | `"enabled": "getvar('ready') == 'true'"` | 如果表达式不包含 `{{...}}`，系统会自动将其视为Python代码执行。 |
+
+#### `enabled` 的执行时机与依赖关系
+
+得益于**统一执行顺序**，`enabled` 字段的评估可以依赖于在它之前执行的条目所设置的变量。
+
+**示例：**
 ```json
-// 示例：条目间的依赖关系
+// 预设条目1 (injection_order: 100)
 {
-  "name": "基础系统",
+  "name": "系统初始化模块",
   "injection_order": 100,
-  "code_block": "setvar('system_init', True)"
-},
+  "code_block": "setvar('system_ready', True)" // 1. 此代码块先执行，设置变量
+}
+
+// 预设条目2 (injection_order: 200)
 {
-  "name": "高级功能", 
+  "name": "高级功能模块",
   "injection_order": 200,
-  "enabled": "{{python:getvar('system_init') == True}}",  // ← 依赖前面设置的变量
-  "content": "高级功能已启用"
+  "enabled": "{{python:getvar('system_ready') == True}}", // 2. 然后评估此 enabled 字段，此时可以获取到 system_ready 变量
+  "content": "高级功能已启用！"
 }
 ```
+这个特性使得你可以构建出模块化、有依赖关系的复杂提示词逻辑。
 
 #### 关键特性：
-- ✅ **最优先执行**: enabled评估在条目的所有其他处理之前
-- ✅ **支持依赖**: 可以使用前面条目code_block设置的变量
-- ✅ **短路机制**: enabled为false时完全跳过该条目的处理
-- ✅ **缓存机制**: 同次处理中enabled结果会被缓存，避免重复计算
+- ✅ **最优先执行**: `enabled` 的评估在条目的所有其他处理（如 `code_block` 和 `content`）之前。
+- ✅ **支持依赖**: 可以安全地使用在它之前（按 `injection_order` 排序）的条目设置的任何变量。
+- ✅ **短路机制**: 如果 `enabled` 评估结果为 `False`，该条目的后续所有处理（包括 `code_block`）将被完全跳过，以提升性能。
+- ✅ **缓存机制**: 在同一次 `chat` 调用中，`enabled` 的评估结果会被缓存，避免不必要的重复计算。
 
 ### 保留变量
-- `enable` - 始终为True的保留变量
+- `enable` - 一个始终为 `True` 的保留变量，方便在代码中进行判断。
+
+## 📚 **底层API参考**
+
+以下是构成 `ChatAPI` 的底层核心服务。通常情况下，你不需要直接与它们交互，但了解它们有助于更深入地理解系统的工作原理。
+
+### ConfigManager
+
+配置管理器，负责管理由预设、角色卡、玩家卡和世界书等组件构成的聊天配置组合。
+
+#### 初始化
+```python
+from src.services.config_manager import create_config_manager
+
+config_manager = create_config_manager(data_root="data")
+```
+
+#### 主要方法
+
+- `create_config()`: 创建一个新的聊天配置组合。
+- `save_config()` / `load_config()`: 保存和加载配置。
+- `set_current_config()`: 设置当前活动的配置。
+
+### ChatHistoryManager
+
+聊天历史管理器，是整个系统的核心协调器。它负责管理对话历史，并调用其他服务（如宏处理、代码执行）来构建最终的提示词。
+
+#### 主要方法
+
+- `add_user_message()` / `add_assistant_message()`: 添加消息到对话历史。
+- `to_raw_openai_format()` / `to_processed_openai_format()` / `to_clean_openai_format()`: 生成不同视图的提示词。
+
+### ConversationManager
+
+对话管理器，负责对话的持久化存储，包括保存、加载、归档和删除对话历史。
 
 ## 文件格式
 
@@ -639,13 +533,14 @@ conv_manager.delete_conversation("conv_001", archived=False)
 ```json
 {
   "config_id": "配置ID",
-  "name": "配置名称", 
+  "name": "配置名称",
   "description": "配置描述",
   "components": {
     "preset": "文件名.simplified.json",
     "character": "文件名.simplified.json",
     "persona": "文件名.json",
-    "additional_world_book": "文件名.json"
+    "additional_world_book": "文件名.json",
+    "regex_rules": ["规则文件1.json", "规则文件2.json"]
   },
   "tags": ["标签"],
   "created_date": "2025-01-01",

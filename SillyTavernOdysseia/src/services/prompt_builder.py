@@ -44,10 +44,16 @@ class PromptBuilder:
         self.persona_data = persona_data
         self.regex_rule_manager = regex_rule_manager
         
-        # 保存不同视图的提示词缓存
-        self.original_prompt: List[Dict[str, str]] = []  # 原始提示词（仅应用effect_type="original"的规则）
-        self.user_view_prompt: List[Dict[str, str]] = []  # 用户视图（应用effect_type="user_view"或"both_views"的规则）
-        self.assistant_view_prompt: List[Dict[str, str]] = []  # AI模型视图（应用effect_type="assistant_view"或"both_views"的规则）
+        # 保存六种不同视图的提示词缓存
+        # 三种基本格式 (未应用正则)
+        self.raw_prompt: List[Dict[str, Any]] = []  # 原始格式
+        self.processed_prompt: List[Dict[str, Any]] = []  # 处理后的格式 (用户视图)
+        self.clean_prompt: List[Dict[str, str]] = []  # 纯净格式 (AI视图)
+        
+        # 三种基本格式应用正则后
+        self.raw_prompt_with_regex: List[Dict[str, Any]] = []  # 原始格式+正则
+        self.processed_prompt_with_regex: List[Dict[str, Any]] = []  # 处理后的格式+正则 (用户视图)
+        self.clean_prompt_with_regex: List[Dict[str, str]] = []  # 纯净格式+正则 (AI视图)
 
     def build_final_prompt(
         self,
@@ -55,6 +61,7 @@ class PromptBuilder:
         world_book_entries: List[WorldBookEntry],
         preset_prompts: List[PresetPrompt],
         triggered_entries: set[int],
+        view_type: str = "all"
     ) -> List[Dict[str, str]]:
         """
         动态构建最终的提示词。
@@ -70,7 +77,26 @@ class PromptBuilder:
            e. 应用宏处理后的正则规则（after_macro）。
            f. 生成消息。
         4. 合并相邻的相同角色的消息。
-        5. 返回最终的OpenAI格式消息列表。
+        5. 生成三种基础提示词格式。
+        6. 对每种基础格式应用正则规则。
+        7. 根据要求的视图类型返回相应的提示词格式。
+
+        Args:
+            chat_history: 聊天历史记录
+            world_book_entries: 世界书条目列表
+            preset_prompts: 预设提示词列表
+            triggered_entries: 已触发的条目ID集合
+            view_type: 要返回的视图类型，可选值:
+                "raw" - 原始视图
+                "processed" - 处理后的视图 (带元数据)
+                "clean" - 纯净视图 (标准OpenAI格式)
+                "raw_with_regex" - 应用正则后的原始视图
+                "processed_with_regex" - 应用正则后的处理视图
+                "clean_with_regex" - 应用正则后的纯净视图
+                "all" - 返回所有视图 (默认)
+        
+        Returns:
+            根据view_type返回相应格式的提示词列表
         """
         print("🔄 开始动态构建提示词")
 
@@ -118,14 +144,40 @@ class PromptBuilder:
         
         print(f"🎉 动态构建完成，最终包含 {len(final_messages)} 个消息块")
         
-        # 5. 应用不同视图的正则规则并保存各种视图
+        # 5. 生成三种基础提示词格式
+        self.raw_prompt = [msg.to_openai_format() for msg in final_messages]
+        
+        # 克隆消息，生成处理后和纯净格式
+        processed_msg_clones = [self._clone_chat_message(msg) for msg in final_messages]
+        clean_msg_clones = [self._clone_chat_message(msg) for msg in final_messages]
+        
+        # 处理后的格式 (带元数据)
+        self.processed_prompt = [msg.to_openai_format() for msg in processed_msg_clones]
+        
+        # 纯净格式 (标准OpenAI格式，去掉扩展字段)
+        self.clean_prompt = [
+            {k: v for k, v in msg.to_openai_format().items() if not k.startswith('_')}
+            for msg in clean_msg_clones
+        ]
+        
+        # 6. 对每种基础格式应用正则规则
         self._apply_view_specific_regex_rules(final_messages)
         
-        # 5. 应用不同视图的正则规则并保存各种视图
-        self._apply_view_specific_regex_rules(final_messages)
-        
-        # 6. 返回最终的OpenAI格式消息列表
-        return [msg.to_openai_format() for msg in final_messages]
+        # 7. 根据要求返回对应的视图
+        if view_type == "raw":
+            return self.raw_prompt
+        elif view_type == "processed":
+            return self.processed_prompt
+        elif view_type == "clean":
+            return self.clean_prompt
+        elif view_type == "raw_with_regex":
+            return self.raw_prompt_with_regex
+        elif view_type == "processed_with_regex":
+            return self.processed_prompt_with_regex
+        elif view_type == "clean_with_regex":
+            return self.clean_prompt_with_regex
+        else:  # "all" 或其他值，返回默认视图
+            return self.processed_prompt_with_regex  # 默认返回应用正则后的处理视图
 
     def _collect_all_sources(
         self,
@@ -426,120 +478,72 @@ class PromptBuilder:
     
     def _apply_view_specific_regex_rules(self, messages: List[ChatMessage]) -> None:
         """
-        应用不同视图的正则规则，并保存各种输出格式
-        
-        视图类型:
-        - original: 修改原始提示词（直接修改底层数据）
-        - user_view: 只修改用户视图的提示词（用户看到的提示词）
-        - assistant_view: 只修改AI模型视图的提示词（AI模型看到的提示词）
-        
-        对应到API输出:
-        - raw_prompt: 应用original视图规则后的原始提示词
-        - processed_prompt: 应用user_view视图规则后的提示词
-        - clean_prompt: 应用assistant_view视图规则后的提示词
+        对三种基础提示词格式分别应用正则规则，生成六种最终提示词格式。
+
+        工作流程:
+        1. 为三种基础视图创建独立的消息副本。
+        2. 对每个视图，应用适合该视图的正则规则。
+        3. 转换为OpenAI格式并保存到相应的缓存。
+
+        规则应用逻辑:
+        - 每条规则的 `views` 字段必须显式指定目标视图才会生效。
+        - 对于每种基础格式，创建两个版本：原始版本和应用正则后的版本。
         """
         if not self.regex_rule_manager:
-            # 无正则规则管理器，所有视图都使用相同的原始消息
-            self.original_prompt = [msg.to_openai_format() for msg in messages]
-            self.user_view_prompt = self.original_prompt
-            self.assistant_view_prompt = self.original_prompt
+            # 无正则规则管理器，所有应用正则后的视图等于基础视图
+            self.raw_prompt_with_regex = self.raw_prompt.copy()
+            self.processed_prompt_with_regex = self.processed_prompt.copy()
+            self.clean_prompt_with_regex = self.clean_prompt.copy()
             return
-            
-        # 复制原始消息，用于不同视图
-        original_messages = messages
-        user_view_messages = [self._clone_chat_message(msg) for msg in messages]
-        assistant_view_messages = [self._clone_chat_message(msg) for msg in messages]
-        
-        # 应用各种视图的规则
-        # 1. 处理 original 视图规则（修改原始提示词）
-        for msg in original_messages:
-            for part in msg.content_parts:
-                part.content = self.regex_rule_manager.apply_regex_to_content(
-                    content=part.content,
-                    source_type=part.source_type,
-                    placement="after_macro",  # 这里使用after_macro是因为在ChatMessage上已经处理过宏
-                    view="original"
-                )
-                
-        # 2. 处理 user_view 视图规则（用户看到的提示词）
-        for msg in user_view_messages:
-            for part in msg.content_parts:
-                part.content = self.regex_rule_manager.apply_regex_to_content(
-                    content=part.content,
-                    source_type=part.source_type,
-                    placement="after_macro",
-                    view="user_view"
-                )
-                
-        # 3. 处理 assistant_view 视图规则（AI模型看到的提示词）
-        for msg in assistant_view_messages:
-            for part in msg.content_parts:
-                part.content = self.regex_rule_manager.apply_regex_to_content(
-                    content=part.content,
-                    source_type=part.source_type,
-                    placement="after_macro",
-                    view="assistant_view"
-                )
-                
-        # 转换为OpenAI格式并保存各视图
-        self.original_prompt = [msg.to_openai_format() for msg in original_messages]
-        self.user_view_prompt = [msg.to_openai_format() for msg in user_view_messages]
-        self.assistant_view_prompt = [msg.to_openai_format() for msg in assistant_view_messages]
-        
-    def _apply_view_specific_regex(self, content: str, source_type: str, views: List[str]) -> str:
-        """
-        应用特定视图的正则规则
-        
-        Args:
-            content: 要处理的内容
-            source_type: 内容的来源类型
-            effect_types: 要应用的效果类型列表
-            
-        Returns:
-            处理后的内容
-        """
-        if not self.regex_rule_manager:
-            return content
-            
-        result = content
-        
-        # 获取所有适用的规则
+
+        # 1. 为三种视图创建独立的副本 (用于应用正则)
+        raw_view_messages = [self._clone_chat_message(msg) for msg in messages]
+        processed_view_messages = [self._clone_chat_message(msg) for msg in messages]
+        clean_view_messages = [self._clone_chat_message(msg) for msg in messages]
+
+        # 2. 遍历所有规则，根据views字段精确应用到对应的视图
         for rule in self.regex_rule_manager.get_rules():
-            if not rule.enabled:
+            if not rule.enabled or not rule.views:  # 如果规则禁用或未指定views，则跳过
                 continue
-                
-            # 检查是否有匹配的视图
-            has_matching_view = False
-            for view in views:
-                if view in rule.views:
-                    has_matching_view = True
-                    break
-                    
-            if not has_matching_view:
-                continue
-                
-            # 检查目标类型是否匹配
-            target_mapping = {
-                "conversation": "user" if "user_message" in content else "assistant_response",
-                "world": "world_book",
-                "preset": "preset",
-                "char": "assistant_thinking"
-            }
+
+            # 确定规则要应用到哪些视图
+            apply_to_raw = "raw_view" in rule.views
+            apply_to_user = "user_view" in rule.views
+            apply_to_assistant = "assistant_view" in rule.views
+
+            # 应用规则到各个视图
+            if apply_to_raw:
+                for msg in raw_view_messages:
+                    self._apply_rule_to_message(rule, msg)
             
-            target = target_mapping.get(source_type, "unknown")
-            if target not in rule.targets:
-                continue
-                
-            # 应用规则
-            try:
-                if rule.id in self.regex_rule_manager.compiled_rules:
-                    compiled_pattern = self.regex_rule_manager.compiled_rules[rule.id]["pattern"]
-                    replace_pattern = self.regex_rule_manager.compiled_rules[rule.id]["replace"]
-                    result = compiled_pattern.sub(replace_pattern, result)
-            except Exception as e:
-                print(f"⚠️ 应用视图特定规则失败 [{rule.id}]: {e}")
-                
-        return result
+            if apply_to_user:
+                for msg in processed_view_messages:
+                    self._apply_rule_to_message(rule, msg)
+            
+            if apply_to_assistant:
+                for msg in clean_view_messages:
+                    self._apply_rule_to_message(rule, msg)
+
+        # 3. 转换为OpenAI格式并保存到应用正则后的缓存
+        self.raw_prompt_with_regex = [msg.to_openai_format() for msg in raw_view_messages]
+        
+        self.processed_prompt_with_regex = [msg.to_openai_format() for msg in processed_view_messages]
+        
+        self.clean_prompt_with_regex = [
+            {k: v for k, v in msg.to_openai_format().items() if not k.startswith('_')}
+            for msg in clean_view_messages
+        ]
+
+    def _apply_rule_to_message(self, rule, message: ChatMessage):
+        """将单个规则应用于单个消息的所有内容部分"""
+        for part in message.content_parts:
+            # 规则只在宏处理后应用
+            part.content = self.regex_rule_manager.apply_regex_to_content_part(
+                content_part=part,
+                placement="after_macro",
+                rule_to_apply=rule  # 传递特定规则进行应用
+            )
+        
         
     def _clone_chat_message(self, message: ChatMessage) -> ChatMessage:
         """创建聊天消息的深度副本"""

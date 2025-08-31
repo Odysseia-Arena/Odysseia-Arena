@@ -183,14 +183,23 @@ class ChatHistoryManager:
                 self.triggered_entries.add(entry.id)
                 print(f"✅ 条件世界书条目已触发: {entry.name}")
 
-    def build_final_prompt(self, view_type: str = "original") -> List[Dict[str, str]]:
+    def build_final_prompt(self, view_type: str = "all") -> List[Dict[str, str]]:
         """
         构建最终的提示词。
         这是对外暴露的主要方法，它将任务委托给PromptBuilder。
         
         Args:
-            view_type: 视图类型，可选值: "raw", "processed", "clean"
-                       分别对应不同处理阶段的视图，可以单独应用正则规则
+            view_type: 视图类型，可选值:
+                "raw" - 原始视图 (未应用正则)
+                "processed" - 处理后的视图 (带元数据，未应用正则)
+                "clean" - 纯净视图 (标准OpenAI格式，未应用正则)
+                "raw_with_regex" - 应用正则后的原始视图
+                "processed_with_regex" - 应用正则后的处理视图 (带元数据)
+                "clean_with_regex" - 应用正则后的纯净视图 (标准OpenAI格式)
+                "all" - 返回所有视图 (默认)
+        
+        Returns:
+            根据view_type返回相应格式的提示词列表
         """
         if not self.enable_macros:
             # 如果禁用宏，可以提供一个简化的、不执行代码的构建路径
@@ -207,30 +216,48 @@ class ChatHistoryManager:
 
     def to_raw_openai_format(self) -> List[Dict[str, Any]]:
         """
-        输出格式1: 最初未经过enabled判断的原始提示词
-        
-        这个视图对应 RegexRule 中的 "raw" 视图
+        输出格式1: 最初未经过enabled判断的原始提示词 (未应用正则)
         """
-        # 直接使用 build_final_prompt 方法，指定视图类型为 "raw"
         return self.build_final_prompt(view_type="raw")
 
     def to_processed_openai_format(self, execute_code: bool = True) -> List[Dict[str, Any]]:
         """
-        输出格式2: 经过enabled判断和处理的提示词
+        输出格式2: 经过enabled判断和处理的提示词 (未应用正则)
         
-        这个视图对应 RegexRule 中的 "processed" 视图
+        带有元数据信息，适合用户查看。
         """
         # execute_code 参数在这里被忽略，因为新的流程总是执行
         return self.build_final_prompt(view_type="processed")
 
     def to_clean_openai_format(self, execute_code: bool = True) -> List[Dict[str, str]]:
         """
-        输出格式3: 去掉来源信息的标准OpenAI格式
+        输出格式3: 去掉来源信息的标准OpenAI格式 (未应用正则)
         
-        这个视图对应 RegexRule 中的 "clean" 视图
+        纯净的OpenAI格式，适合发送给AI模型。
         """
-        # 直接使用 build_final_prompt 方法，指定视图类型为 "clean"
         return self.build_final_prompt(view_type="clean")
+    
+    def to_raw_with_regex_format(self) -> List[Dict[str, Any]]:
+        """
+        输出格式4: 原始提示词 + 应用正则规则
+        """
+        return self.build_final_prompt(view_type="raw_with_regex")
+    
+    def to_processed_with_regex_format(self) -> List[Dict[str, Any]]:
+        """
+        输出格式5: 处理后的提示词 + 应用正则规则
+        
+        带有元数据信息 + 应用了视图特定的正则规则，是默认的用户视图格式。
+        """
+        return self.build_final_prompt(view_type="processed_with_regex")
+    
+    def to_clean_with_regex_format(self) -> List[Dict[str, str]]:
+        """
+        输出格式6: 纯净OpenAI格式 + 应用正则规则
+        
+        应用了视图特定的正则规则，是默认的AI模型视图格式。
+        """
+        return self.build_final_prompt(view_type="clean_with_regex")
 
     def reset_chat(self) -> None:
         """重置聊天状态"""

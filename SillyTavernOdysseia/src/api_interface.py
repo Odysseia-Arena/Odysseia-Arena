@@ -30,6 +30,7 @@ class ChatRequest:
     config_id: str  # 配置ID，指定使用的预设、角色卡、额外世界书配置
     input: Optional[List[Dict[str, str]]] = None  # OpenAI格式的消息数组（完整对话历史）。如果为None，则返回角色卡的message字段内容
     output_formats: Optional[List[str]] = None  # 指定需要的输出格式列表
+    views: Optional[List[str]] = None  # 指定需要的视图类型列表
     
     @classmethod
     def from_json(cls, json_data: Union[str, Dict[str, Any]]) -> 'ChatRequest':
@@ -44,7 +45,8 @@ class ChatRequest:
             session_id=data['session_id'],
             config_id=data['config_id'],
             input=data.get('input'),
-            output_formats=data.get('output_formats')
+            output_formats=data.get('output_formats'),
+            views=data.get('views')
         )
     
     def to_json(self) -> str:
@@ -54,7 +56,8 @@ class ChatRequest:
             'session_id': self.session_id,
             'config_id': self.config_id,
             'input': self.input,
-            'output_formats': self.output_formats
+            'output_formats': self.output_formats,
+            'views': self.views
         }, ensure_ascii=False, indent=2)
     
     def validate(self) -> List[str]:
@@ -86,10 +89,19 @@ class ChatRequest:
             if not isinstance(self.output_formats, list):
                 errors.append("output_formats 必须是列表或None")
             else:
-                valid_formats = {'raw', 'processed', 'clean'}
+                valid_formats = {'raw', 'processed', 'clean', 'raw_with_regex', 'processed_with_regex', 'clean_with_regex'}
                 for fmt in self.output_formats:
                     if fmt not in valid_formats:
                         errors.append(f"无效的输出格式: '{fmt}'，支持的格式: {valid_formats}")
+        
+        if self.views is not None:
+            if not isinstance(self.views, list):
+                errors.append("views 必须是列表或None")
+            else:
+                valid_views = {'raw', 'processed', 'clean', 'raw_with_regex', 'processed_with_regex', 'clean_with_regex', 'all'}
+                for view in self.views:
+                    if view not in valid_views:
+                        errors.append(f"无效的视图类型: '{view}'，支持的类型: {valid_views}")
         
         return errors
 
@@ -99,13 +111,19 @@ class ChatResponse:
     """聊天响应数据类"""
     source_id: str  # 来源ID
     
-    # 三种不同的OpenAI格式输出
-    raw_prompt: Optional[List[Dict[str, Any]]] = None  # 格式1: 未经enabled判断的原始提示词
-    processed_prompt: Optional[List[Dict[str, Any]]] = None  # 格式2: 已处理但保留来源信息
+    # 六种不同的OpenAI格式输出
+    # 基础三种格式 (未应用正则)
+    raw_prompt: Optional[List[Dict[str, Any]]] = None  # 格式1: 未经处理的原始提示词
+    processed_prompt: Optional[List[Dict[str, Any]]] = None  # 格式2: 处理后但保留元数据
     clean_prompt: Optional[List[Dict[str, str]]] = None  # 格式3: 标准OpenAI格式
     
+    # 应用正则后的三种格式
+    raw_prompt_with_regex: Optional[List[Dict[str, Any]]] = None  # 格式4: 原始提示词+正则
+    processed_prompt_with_regex: Optional[List[Dict[str, Any]]] = None  # 格式5: 处理后提示词+正则
+    clean_prompt_with_regex: Optional[List[Dict[str, str]]] = None  # 格式6: 标准格式+正则
+    
     # 向后兼容字段
-    final_prompt: Optional[List[Dict[str, Any]]] = None  # 指向processed_prompt的别名
+    final_prompt: Optional[List[Dict[str, Any]]] = None  # 默认指向processed_prompt_with_regex
     
     is_character_message: bool = False  # 是否为角色卡消息
     character_messages: Optional[List[str]] = None  # 角色卡的所有message（当无用户输入时）
@@ -124,12 +142,23 @@ class ChatResponse:
         }
         
         # 添加非空的提示词格式
+        # 基础三种格式 (未应用正则)
         if self.raw_prompt is not None:
             response_data['raw_prompt'] = self.raw_prompt
         if self.processed_prompt is not None:
             response_data['processed_prompt'] = self.processed_prompt
         if self.clean_prompt is not None:
             response_data['clean_prompt'] = self.clean_prompt
+            
+        # 应用正则后的三种格式
+        if self.raw_prompt_with_regex is not None:
+            response_data['raw_prompt_with_regex'] = self.raw_prompt_with_regex
+        if self.processed_prompt_with_regex is not None:
+            response_data['processed_prompt_with_regex'] = self.processed_prompt_with_regex
+        if self.clean_prompt_with_regex is not None:
+            response_data['clean_prompt_with_regex'] = self.clean_prompt_with_regex
+            
+        # 向后兼容字段
         if self.final_prompt is not None:
             response_data['final_prompt'] = self.final_prompt
         
@@ -330,24 +359,35 @@ class ChatAPI:
         
         # 根据请求的格式生成输出
         raw_prompt = None
-        processed_prompt = None 
+        processed_prompt = None
         clean_prompt = None
+        
+        # 应用正则后的格式
+        raw_prompt_with_regex = None
+        processed_prompt_with_regex = None
+        clean_prompt_with_regex = None
         
         if "raw" in output_formats:
             raw_prompt = manager.to_raw_openai_format()
+            raw_prompt_with_regex = manager.to_raw_with_regex_format()
         if "processed" in output_formats:
             processed_prompt = manager.to_processed_openai_format(execute_code=True)
+            processed_prompt_with_regex = manager.to_processed_with_regex_format()
         if "clean" in output_formats:
             clean_prompt = manager.to_clean_openai_format(execute_code=True)
+            clean_prompt_with_regex = manager.to_clean_with_regex_format()
         
-        # 向后兼容：final_prompt指向processed_prompt
-        final_prompt = processed_prompt
+        # 向后兼容：final_prompt现在指向processed_prompt_with_regex
+        final_prompt = processed_prompt_with_regex
         
         return ChatResponse(
             source_id=session_id,
             raw_prompt=raw_prompt,
             processed_prompt=processed_prompt,
             clean_prompt=clean_prompt,
+            raw_prompt_with_regex=raw_prompt_with_regex,
+            processed_prompt_with_regex=processed_prompt_with_regex,
+            clean_prompt_with_regex=clean_prompt_with_regex,
             final_prompt=final_prompt,  # 向后兼容
             is_character_message=True,
             character_messages=character_messages,
@@ -357,7 +397,10 @@ class ChatAPI:
                 "output_formats": output_formats,
                 "prompt_blocks_raw": len(raw_prompt) if raw_prompt else 0,
                 "prompt_blocks_processed": len(processed_prompt) if processed_prompt else 0,
-                "prompt_blocks_clean": len(clean_prompt) if clean_prompt else 0
+                "prompt_blocks_clean": len(clean_prompt) if clean_prompt else 0,
+                "prompt_blocks_raw_with_regex": len(raw_prompt_with_regex) if raw_prompt_with_regex else 0,
+                "prompt_blocks_processed_with_regex": len(processed_prompt_with_regex) if processed_prompt_with_regex else 0,
+                "prompt_blocks_clean_with_regex": len(clean_prompt_with_regex) if clean_prompt_with_regex else 0
             }
         )
     
@@ -389,20 +432,28 @@ class ChatAPI:
         if last_user_message:
             manager._check_conditional_world_book(last_user_message)
         
-        # 根据请求的格式生成输出（现在可以正常使用现有方法）
+        # 根据请求的格式生成输出
         raw_prompt = None
-        processed_prompt = None 
+        processed_prompt = None
         clean_prompt = None
+        
+        # 应用正则后的格式
+        raw_prompt_with_regex = None
+        processed_prompt_with_regex = None
+        clean_prompt_with_regex = None
         
         if "raw" in output_formats:
             raw_prompt = manager.to_raw_openai_format()
+            raw_prompt_with_regex = manager.to_raw_with_regex_format()
         if "processed" in output_formats:
             processed_prompt = manager.to_processed_openai_format(execute_code=True)
+            processed_prompt_with_regex = manager.to_processed_with_regex_format()
         if "clean" in output_formats:
             clean_prompt = manager.to_clean_openai_format(execute_code=True)
+            clean_prompt_with_regex = manager.to_clean_with_regex_format()
         
-        # 向后兼容：final_prompt指向processed_prompt
-        final_prompt = processed_prompt
+        # 向后兼容：final_prompt现在指向processed_prompt_with_regex
+        final_prompt = processed_prompt_with_regex
         
         # 保存对话状态
         self._save_conversation(session_id, manager)
@@ -412,6 +463,9 @@ class ChatAPI:
             raw_prompt=raw_prompt,
             processed_prompt=processed_prompt,
             clean_prompt=clean_prompt,
+            raw_prompt_with_regex=raw_prompt_with_regex,
+            processed_prompt_with_regex=processed_prompt_with_regex,
+            clean_prompt_with_regex=clean_prompt_with_regex,
             final_prompt=final_prompt,  # 向后兼容
             is_character_message=False,
             processing_info={
@@ -422,6 +476,9 @@ class ChatAPI:
                 "prompt_blocks_raw": len(raw_prompt) if raw_prompt else 0,
                 "prompt_blocks_processed": len(processed_prompt) if processed_prompt else 0,
                 "prompt_blocks_clean": len(clean_prompt) if clean_prompt else 0,
+                "prompt_blocks_raw_with_regex": len(raw_prompt_with_regex) if raw_prompt_with_regex else 0,
+                "prompt_blocks_processed_with_regex": len(processed_prompt_with_regex) if processed_prompt_with_regex else 0,
+                "prompt_blocks_clean_with_regex": len(clean_prompt_with_regex) if clean_prompt_with_regex else 0,
                 "last_user_message": last_user_message
             }
         )

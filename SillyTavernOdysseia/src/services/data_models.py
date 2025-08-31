@@ -200,10 +200,12 @@ class RegexRule:
     # after_macro: 在宏处理后应用正则
     
     # 作用效果：决定规则如何影响提示词的不同视图
-    views: List[str] = field(default_factory=lambda: ["original"])  # 可选值: "original", "user_view", "assistant_view"
-    # original: 修改原始提示词
-    # user_view: 修改用户视图（用户看到的提示词）
-    # assistant_view: 修改AI模型视图（AI模型看到的提示词）
+    views: List[str] = field(default_factory=list)  # 可选值: "raw_view", "user_view", "assistant_view"
+    # 注意: views为空或未设置表示规则不会应用于任何视图
+    # raw_view: 修改原始视图 (未应用正则前的视图)
+    # user_view: 修改用户视图 (processed_prompt，用户看到的提示词)
+    # assistant_view: 修改AI模型视图 (clean_prompt，AI模型看到的提示词)
+    # 向后兼容: 旧的"original"视图将自动映射为同时包含"user_view"和"assistant_view"
     
     # 规则描述
     description: str = ""
