@@ -89,7 +89,7 @@ class ChatRequest:
             if not isinstance(self.output_formats, list):
                 errors.append("output_formats 必须是列表或None")
             else:
-                valid_formats = {'raw', 'processed', 'clean', 'raw_with_regex', 'processed_with_regex', 'clean_with_regex'}
+                valid_formats = {'raw', 'processed', 'clean'}
                 for fmt in self.output_formats:
                     if fmt not in valid_formats:
                         errors.append(f"无效的输出格式: '{fmt}'，支持的格式: {valid_formats}")
@@ -98,7 +98,7 @@ class ChatRequest:
             if not isinstance(self.views, list):
                 errors.append("views 必须是列表或None")
             else:
-                valid_views = {'raw', 'processed', 'clean', 'raw_with_regex', 'processed_with_regex', 'clean_with_regex', 'all'}
+                valid_views = {'user', 'assistant', 'all'}
                 for view in self.views:
                     if view not in valid_views:
                         errors.append(f"无效的视图类型: '{view}'，支持的类型: {valid_views}")
@@ -111,16 +111,10 @@ class ChatResponse:
     """聊天响应数据类"""
     source_id: str  # 来源ID
     
-    # 六种不同的OpenAI格式输出
-    # 基础三种格式 (未应用正则)
-    raw_prompt: Optional[List[Dict[str, Any]]] = None  # 格式1: 未经处理的原始提示词
-    processed_prompt: Optional[List[Dict[str, Any]]] = None  # 格式2: 处理后但保留元数据
-    clean_prompt: Optional[List[Dict[str, str]]] = None  # 格式3: 标准OpenAI格式
-    
     # 应用正则后的三种格式
-    raw_prompt_with_regex: Optional[List[Dict[str, Any]]] = None  # 格式4: 原始提示词+正则
-    processed_prompt_with_regex: Optional[List[Dict[str, Any]]] = None  # 格式5: 处理后提示词+正则
-    clean_prompt_with_regex: Optional[List[Dict[str, str]]] = None  # 格式6: 标准格式+正则
+    raw_prompt_with_regex: Optional[List[Dict[str, Any]]] = None  # 格式1: 原始提示词+正则
+    processed_prompt_with_regex: Optional[List[Dict[str, Any]]] = None  # 格式2: 处理后提示词+正则
+    clean_prompt_with_regex: Optional[List[Dict[str, str]]] = None  # 格式3: 标准格式+正则
     
     # 向后兼容字段
     final_prompt: Optional[List[Dict[str, Any]]] = None  # 默认指向processed_prompt_with_regex
@@ -141,22 +135,25 @@ class ChatResponse:
             'processing_info': self.processing_info
         }
         
-        # 添加非空的提示词格式
-        # 基础三种格式 (未应用正则)
-        if self.raw_prompt is not None:
-            response_data['raw_prompt'] = self.raw_prompt
-        if self.processed_prompt is not None:
-            response_data['processed_prompt'] = self.processed_prompt
-        if self.clean_prompt is not None:
-            response_data['clean_prompt'] = self.clean_prompt
-            
-        # 应用正则后的三种格式
+        # 对每种请求的输出格式，都提供用户视图和AI视图
+        # 无论请求哪种格式，都会返回两个视图
         if self.raw_prompt_with_regex is not None:
-            response_data['raw_prompt_with_regex'] = self.raw_prompt_with_regex
+            response_data['raw_prompt'] = {
+                'user_view': self.processed_prompt_with_regex,
+                'ai_view': self.clean_prompt_with_regex
+            }
+        
         if self.processed_prompt_with_regex is not None:
-            response_data['processed_prompt_with_regex'] = self.processed_prompt_with_regex
+            response_data['processed_prompt'] = {
+                'user_view': self.processed_prompt_with_regex,
+                'ai_view': self.clean_prompt_with_regex
+            }
+        
         if self.clean_prompt_with_regex is not None:
-            response_data['clean_prompt_with_regex'] = self.clean_prompt_with_regex
+            response_data['clean_prompt'] = {
+                'user_view': self.processed_prompt_with_regex,
+                'ai_view': self.clean_prompt_with_regex
+            }
             
         # 向后兼容字段
         if self.final_prompt is not None:
@@ -285,6 +282,14 @@ class ChatAPI:
             output_formats = request.output_formats
             if output_formats is None:
                 output_formats = ["raw", "processed", "clean"]  # 默认返回所有格式
+                
+            # 确保输出格式有效（仅包含基础三种格式）
+            valid_formats = {"raw", "processed", "clean"}
+            output_formats = [fmt for fmt in output_formats if fmt in valid_formats]
+            
+            # 如果没有有效的格式，默认返回所有格式
+            if not output_formats:
+                output_formats = ["raw", "processed", "clean"]
             
             # 1. 加载或获取ChatHistoryManager
             manager = self._get_or_create_manager(request.session_id, request.config_id)
@@ -357,34 +362,21 @@ class ChatAPI:
             elif isinstance(message_data, str):
                 character_messages = [message_data]
         
-        # 根据请求的格式生成输出
-        raw_prompt = None
-        processed_prompt = None
-        clean_prompt = None
+        # 无论用户请求哪种格式，我们都需要生成用户视图和AI视图
+        # 始终生成processed_with_regex (用户视图) 和 clean_with_regex (AI视图)
+        processed_prompt_with_regex = manager.to_processed_with_regex_format()
+        clean_prompt_with_regex = manager.to_clean_with_regex_format()
         
-        # 应用正则后的格式
+        # 根据请求的格式生成原始视图 (如需要)
         raw_prompt_with_regex = None
-        processed_prompt_with_regex = None
-        clean_prompt_with_regex = None
-        
         if "raw" in output_formats:
-            raw_prompt = manager.to_raw_openai_format()
             raw_prompt_with_regex = manager.to_raw_with_regex_format()
-        if "processed" in output_formats:
-            processed_prompt = manager.to_processed_openai_format(execute_code=True)
-            processed_prompt_with_regex = manager.to_processed_with_regex_format()
-        if "clean" in output_formats:
-            clean_prompt = manager.to_clean_openai_format(execute_code=True)
-            clean_prompt_with_regex = manager.to_clean_with_regex_format()
         
         # 向后兼容：final_prompt现在指向processed_prompt_with_regex
         final_prompt = processed_prompt_with_regex
         
         return ChatResponse(
             source_id=session_id,
-            raw_prompt=raw_prompt,
-            processed_prompt=processed_prompt,
-            clean_prompt=clean_prompt,
             raw_prompt_with_regex=raw_prompt_with_regex,
             processed_prompt_with_regex=processed_prompt_with_regex,
             clean_prompt_with_regex=clean_prompt_with_regex,
@@ -395,9 +387,6 @@ class ChatAPI:
                 "config_loaded": True,
                 "message_count": len(character_messages),
                 "output_formats": output_formats,
-                "prompt_blocks_raw": len(raw_prompt) if raw_prompt else 0,
-                "prompt_blocks_processed": len(processed_prompt) if processed_prompt else 0,
-                "prompt_blocks_clean": len(clean_prompt) if clean_prompt else 0,
                 "prompt_blocks_raw_with_regex": len(raw_prompt_with_regex) if raw_prompt_with_regex else 0,
                 "prompt_blocks_processed_with_regex": len(processed_prompt_with_regex) if processed_prompt_with_regex else 0,
                 "prompt_blocks_clean_with_regex": len(clean_prompt_with_regex) if clean_prompt_with_regex else 0
@@ -432,25 +421,15 @@ class ChatAPI:
         if last_user_message:
             manager._check_conditional_world_book(last_user_message)
         
-        # 根据请求的格式生成输出
-        raw_prompt = None
-        processed_prompt = None
-        clean_prompt = None
+        # 无论用户请求哪种格式，我们都需要生成用户视图和AI视图
+        # 始终生成processed_with_regex (用户视图) 和 clean_with_regex (AI视图)
+        processed_prompt_with_regex = manager.to_processed_with_regex_format()
+        clean_prompt_with_regex = manager.to_clean_with_regex_format()
         
-        # 应用正则后的格式
+        # 根据请求的格式生成原始视图 (如需要)
         raw_prompt_with_regex = None
-        processed_prompt_with_regex = None
-        clean_prompt_with_regex = None
-        
         if "raw" in output_formats:
-            raw_prompt = manager.to_raw_openai_format()
             raw_prompt_with_regex = manager.to_raw_with_regex_format()
-        if "processed" in output_formats:
-            processed_prompt = manager.to_processed_openai_format(execute_code=True)
-            processed_prompt_with_regex = manager.to_processed_with_regex_format()
-        if "clean" in output_formats:
-            clean_prompt = manager.to_clean_openai_format(execute_code=True)
-            clean_prompt_with_regex = manager.to_clean_with_regex_format()
         
         # 向后兼容：final_prompt现在指向processed_prompt_with_regex
         final_prompt = processed_prompt_with_regex
@@ -460,9 +439,6 @@ class ChatAPI:
         
         return ChatResponse(
             source_id=session_id,
-            raw_prompt=raw_prompt,
-            processed_prompt=processed_prompt,
-            clean_prompt=clean_prompt,
             raw_prompt_with_regex=raw_prompt_with_regex,
             processed_prompt_with_regex=processed_prompt_with_regex,
             clean_prompt_with_regex=clean_prompt_with_regex,
@@ -473,9 +449,6 @@ class ChatAPI:
                 "total_messages": len(manager.chat_history),
                 "triggered_entries": len(manager.triggered_entries),
                 "output_formats": output_formats,
-                "prompt_blocks_raw": len(raw_prompt) if raw_prompt else 0,
-                "prompt_blocks_processed": len(processed_prompt) if processed_prompt else 0,
-                "prompt_blocks_clean": len(clean_prompt) if clean_prompt else 0,
                 "prompt_blocks_raw_with_regex": len(raw_prompt_with_regex) if raw_prompt_with_regex else 0,
                 "prompt_blocks_processed_with_regex": len(processed_prompt_with_regex) if processed_prompt_with_regex else 0,
                 "prompt_blocks_clean_with_regex": len(clean_prompt_with_regex) if clean_prompt_with_regex else 0,

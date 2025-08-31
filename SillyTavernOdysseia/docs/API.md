@@ -7,7 +7,7 @@
 本项目实现了一个统一的Python API接口，封装了完整的聊天系统功能。系统核心功能已实现，但仍在持续迭代和重构以提升代码质量和可维护性。
 
 - ✅ **🌟 新：JSON输入接口**：支持OpenAI格式的完整对话历史输入
-- ✅ **🌟 新：六种输出格式**：原始三种（raw、processed、clean）及其应用正则后的对应格式
+- ✅ **🌟 新：用户视图和AI视图**：针对每种输入格式（raw、processed、clean）提供对应的用户视图和AI视图
 - ✅ **🌟 新：前缀变量访问**：`world_var`、`preset_var` 等跨作用域访问
 - ✅ **🌟 新：统一执行顺序**：单遍按词条处理，确保变量依赖正确
 - ✅ **输入接口**：处理配置ID、对话历史，返回最终提示词
@@ -97,7 +97,7 @@ print(legacy_response.final_prompt)
 
 #### 接口定义
 
-##### 新推荐：JSON输入接口
+##### 🌟 输入接口（JSON格式，推荐）
 ```python
 def chat_input_json(request_data: Union[str, Dict[str, Any], ChatRequest]) -> ChatResponse
 ```
@@ -106,7 +106,7 @@ def chat_input_json(request_data: Union[str, Dict[str, Any], ChatRequest]) -> Ch
 ```json
 {
   "session_id": "会话ID",
-  "config_id": "配置ID", 
+  "config_id": "配置ID",
   "input": [
     {"role": "user", "content": "你好"},
     {"role": "assistant", "content": "你好！"},
@@ -116,19 +116,16 @@ def chat_input_json(request_data: Union[str, Dict[str, Any], ChatRequest]) -> Ch
 }
 ```
 
-**参数说明:**
+**输入参数详解:**
 - `session_id`: 会话ID，用于标识和存储对话历史
 - `config_id`: 配置ID，指定使用的预设、角色卡、额外世界书配置
 - `input`: OpenAI格式的消息数组（完整对话历史）。如果为None，则返回角色卡的message字段内容
-- `output_formats`: 指定需要的输出格式列表：
-  - **基础格式（未应用正则）:**
-    - `"raw"`: 未经enabled判断的原始提示词（全量调试用）
-    - `"processed"`: 已处理但保留来源信息（分析用）
-    - `"clean"`: 标准OpenAI格式（API调用用）
-  - **应用正则后的格式:**
-    - `"raw_with_regex"`: 原始提示词+正则（含正则调试用）
-    - `"processed_with_regex"`: 已处理提示词+正则（带元数据，用户视图）
-    - `"clean_with_regex"`: 标准格式+正则（API调用用，**推荐**）
+- `output_formats`: 指定需要的输出格式列表（只需选择基础格式即可，系统会自动提供两个视图）：
+  - `"raw"`: 原始提示词，包含所有条目（全量调试用）
+  - `"processed"`: 已处理但保留来源信息（分析和UI显示用）
+  - `"clean"`: 标准OpenAI格式（API调用用，推荐）
+  
+  **重要**：无论请求哪种格式，系统都会为该格式同时返回用户视图和AI视图的提示词。
 
 ##### 向后兼容：传统输入接口
 ```python
@@ -141,22 +138,18 @@ def chat_input(session_id: str, config_id: str, user_input: Optional[str] = None
 - `user_input`: 可选的用户输入内容。如果为None，则返回角色卡的message字段内容
 - `output_formats`: 输出格式列表（同上）
 
-##### 输出接口
+##### 🌟 输出接口
+
+**Python响应对象:**
 ```python
 @dataclass
 class ChatResponse:
     source_id: str                              # 来源ID
     
-    # 🌟 六种不同的OpenAI格式输出
-    # 基础三种格式 (未应用正则)
-    raw_prompt: Optional[List[Dict[str, Any]]] = None      # 格式1: 未经enabled判断的原始提示词
-    processed_prompt: Optional[List[Dict[str, Any]]] = None # 格式2: 已处理但保留来源信息
-    clean_prompt: Optional[List[Dict[str, str]]] = None     # 格式3: 标准OpenAI格式
-    
-    # 应用正则后的三种格式
-    raw_prompt_with_regex: Optional[List[Dict[str, Any]]] = None      # 格式4: 原始提示词+正则
-    processed_prompt_with_regex: Optional[List[Dict[str, Any]]] = None # 格式5: 已处理提示词+正则
-    clean_prompt_with_regex: Optional[List[Dict[str, str]]] = None     # 格式6: 标准格式+正则（推荐）
+    # 内部字段，保存三种格式的用户视图
+    raw_prompt_with_regex: Optional[List[Dict[str, Any]]] = None      # 原始格式的用户视图
+    processed_prompt_with_regex: Optional[List[Dict[str, Any]]] = None # 处理后格式的用户视图
+    clean_prompt_with_regex: Optional[List[Dict[str, str]]] = None     # 标准格式的用户视图
     
     # 向后兼容字段
     final_prompt: Optional[List[Dict[str, Any]]] = None     # 现在指向processed_prompt_with_regex
@@ -167,45 +160,87 @@ class ChatResponse:
     request: Optional[ChatRequest] = None       # 原始请求信息
 ```
 
-#### 🌟 **六种输出格式与正则视图系统**
+**JSON输出格式:**
+```json
+{
+  "source_id": "会话ID",
+  "is_character_message": false,
+  "processing_info": {...},
+  
+  // 根据请求的输出格式，包含以下一个或多个字段
+  "raw_prompt": {
+    "user_view": [...],  // 用户视图的提示词
+    "ai_view": [...]     // AI视图的提示词
+  },
+  "processed_prompt": {
+    "user_view": [...],  // 用户视图的提示词
+    "ai_view": [...]     // AI视图的提示词
+  },
+  "clean_prompt": {
+    "user_view": [...],  // 用户视图的提示词
+    "ai_view": [...]     // AI视图的提示词
+  }
+}
+```
 
-##### 格式对比
+**注意事项:**
+1. 内部字段与JSON输出不完全对应：
+   - 内部字段 `raw_prompt_with_regex` 对应JSON中 `raw_prompt.user_view`
+   - 内部字段 `processed_prompt_with_regex` 对应JSON中 `processed_prompt.user_view`
+   - 内部字段 `clean_prompt_with_regex` 对应JSON中 `clean_prompt.user_view`
 
-| 格式 | 应用正则 | 用途 | 特点 | 推荐场景 |
-|------|---------|------|------|----------|
-| **raw** | ❌ | 调试分析 | 包含所有条目，未经enabled过滤 | 完整视图、调试问题 |
-| **processed** | ❌ | 来源追踪 | 已处理但保留_source_types和_source_names信息 | 分析处理流程、追踪来源 |
-| **clean** | ❌ | API调用 | 纯OpenAI格式，只包含role和content | 原始API调用 |
-| **raw_with_regex** | ✅ | 调试分析 | 应用正则后的原始提示词 | 调试正则效果 |
-| **processed_with_regex** | ✅ | 用户视图 | 应用正则后的处理提示词，保留元数据 | UI渲染、用户显示 |
-| **clean_with_regex** | ✅ | API调用 | 应用正则后的纯OpenAI格式 | 最终AI API调用（**推荐**） |
+2. 视图与输出格式完全解耦：
+   - 无论请求哪种输出格式，系统都会生成用户视图和AI视图
+   - 每种视图都通过独立的正则规则集处理
+   - 修改一个视图的内容不会影响另一个视图
+
+#### 🌟 **输出格式和视图系统**
+
+##### 视图系统
+
+系统对所有提示词格式都支持两种视图：
+
+| 视图 | 特点 | 用途 |
+|------|------|------|
+| **用户视图** | 可能包含帮助用户理解的额外信息或格式 | 展示给用户的提示词，UI渲染 |
+| **AI视图** | 针对AI模型优化，可能包含额外指令 | 发送给AI模型的提示词 |
+
+无论您请求哪种输出格式（`raw`、`processed`或`clean`），系统都会为每种格式同时返回这两种视图的提示词。
+
+##### 输出格式
+
+| 格式 | 特点 | 用途 |
+|------|------|------|
+| **raw** | 包含所有条目，未经enabled过滤 | 全量调试 |
+| **processed** | 已处理但保留_source_types等元数据 | 分析、开发调试 |
+| **clean** | 纯OpenAI格式，只包含role和content | AI API调用（推荐） |
 
 ##### 正则规则视图系统
 
-系统支持对不同视图应用不同的正则规则，通过规则的 `views` 字段控制。每种基础格式都有对应的应用正则版本。
+正则规则可以通过 `views` 字段精确控制应用于哪个视图：
 
-| 视图 | 对应基础API输出 | 对应应用正则API输出 | 用途 |
-| :--- | :--- | :--- | :--- |
-| **`raw_view`** | `raw_prompt` | `raw_prompt_with_regex` | **面向调试**。此视图包含原始的未过滤内容，适合深度调试。 |
-| **`user_view`** | `processed_prompt` | `processed_prompt_with_regex` | **面向用户展示**。此视图包含 `_source_types` 等元数据，适合在UI中渲染，同时可以通过正则规则隐藏敏感信息或优化格式。 |
-| **`assistant_view`** | `clean_prompt` | `clean_prompt_with_regex` | **面向AI模型**。此视图是纯净的OpenAI格式，可以通过正则规则为其添加秘密指令或简化内容，而不影响用户看到的内容。 |
+| 视图标识 | 应用对象 | 用途 |
+| :--- | :--- | :--- |
+| **`raw_view`** | 原始格式的提示词 | 调试用 |
+| **`user_view`** | 用户视图的提示词 | 用于改变UI显示效果 |
+| **`assistant_view`** | AI视图的提示词 | 用于添加AI专用指令 |
 
 **注意**: `views` 字段与 `placement` 字段完全不同：
 - `placement` 决定规则应用的**时机**（宏处理前或后）
-- `views` 决定规则应用的**效果**（影响哪些输出视图）
+- `views` 决定规则应用的**效果**（影响哪些视图）
 
 ##### `views` 字段行为
 
-`views` 字段是一个数组，用于精确控制规则应用于哪个输出视图。其行为如下：
+`views` 字段是一个数组，用于精确控制规则应用于哪个视图。其行为如下：
 
--   **`"views": ["raw_view"]`**: 规则**只**应用于原始视图 (`raw_prompt` → `raw_prompt_with_regex`)。
--   **`"views": ["user_view"]`**: 规则**只**应用于用户视图 (`processed_prompt` → `processed_prompt_with_regex`)。
--   **`"views": ["assistant_view"]`**: 规则**只**应用于AI视图 (`clean_prompt` → `clean_prompt_with_regex`)。
--   **`"views": ["user_view", "assistant_view"]`**: 规则**同时**应用于用户视图和AI视图。
--   **`"views": ["raw_view", "user_view", "assistant_view"]`**: 规则**同时**应用于所有视图。
--   **`views` 字段未设置或为空数组 `[]`**: **规则无效**。必须显式指定至少一个视图才能使规则生效。
+-   **`"views": ["raw_view"]`**: 规则**只**应用于原始视图
+-   **`"views": ["user_view"]`**: 规则**只**应用于用户视图
+-   **`"views": ["assistant_view"]`**: 规则**只**应用于AI视图
+-   **`"views": ["user_view", "assistant_view"]`**: 规则**同时**应用于用户视图和AI视图
+-   **`"views": ["raw_view", "user_view", "assistant_view"]`**: 规则**同时**应用于所有视图
+-   **`views` 字段未设置或为空数组 `[]`**: **规则无效**
 
-**重要**: 正则规则**不会**修改原始的、经过宏处理后的提示词数据。系统会为每种视图创建独立的副本，然后分别应用相应的正则规则，确保了底层数据的不可变性和视图间的独立性。
+每个视图都是独立的，修改一个视图不会影响其他视图。
 
 ##### 正则视图示例
 
@@ -249,58 +284,66 @@ class ChatResponse:
 ##### 使用示例
 
 ```python
-# 请求六种格式
+# 请求所有三种格式
 request = {
     "session_id": "demo",
     "config_id": "test",
     "input": [{"role": "user", "content": "你好"}],
-    "output_formats": [
-        "raw", "processed", "clean",
-        "raw_with_regex", "processed_with_regex", "clean_with_regex"
-    ]
+    "output_formats": ["raw", "processed", "clean"]
 }
 
 response = api.chat_input_json(request)
 
-# 1. 基础格式（未应用正则）
-## 1.1 原始格式 - 调试用
-print("原始格式（包含禁用条目）:")
-for msg in response.raw_prompt:
-    print(f"  {msg['role']}: {msg['content']}")
+# 1. 原始格式 (raw) - 两种视图
+if response.raw_prompt_with_regex:
+    ## 1.1 原始格式 - 用户视图
+    print("原始格式（用户视图）:")
+    for msg in response.raw_prompt_with_regex:
+        print(f"  {msg['role']}: {msg['content']}")
+    
+    ## 1.2 通过JSON输出访问 AI视图
+    print("通过JSON输出访问（原始格式）:")
+    import json
+    response_data = json.loads(response.to_json())
+    raw_prompt = response_data.get('raw_prompt', [])
+    for msg in raw_prompt:
+        print(f"  {msg['role']}: {msg['content']}")
 
-## 1.2 已处理格式 - 分析用
-print("已处理格式（保留来源信息）:")
-for msg in response.processed_prompt:
-    sources = msg.get('_source_types', [])
-    print(f"  {msg['role']} (来源: {sources}): {msg['content']}")
+# 2. 处理后格式 (processed) - 两种视图
+if response.processed_prompt_with_regex:
+    ## 2.1 处理后格式 - 用户视图
+    print("处理后格式（用户视图）:")
+    for msg in response.processed_prompt_with_regex:
+        sources = msg.get('_source_types', [])
+        print(f"  {msg['role']} (来源: {sources}): {msg['content']}")
+    
+    ## 2.2 通过JSON输出访问 AI视图
+    print("通过JSON输出访问（处理后格式）:")
+    import json
+    response_data = json.loads(response.to_json())
+    processed_prompt = response_data.get('processed_prompt', [])
+    for msg in processed_prompt:
+        print(f"  {msg['role']}: {msg['content']}")
 
-## 1.3 标准格式 - API调用用
-print("标准OpenAI格式:")
-for msg in response.clean_prompt:
-    print(f"  {msg['role']}: {msg['content']}")
-
-# 2. 应用正则后的格式
-## 2.1 原始格式+正则 - 正则调试用
-print("原始格式+正则:")
-for msg in response.raw_prompt_with_regex:
-    print(f"  {msg['role']}: {msg['content']}")
-
-## 2.2 已处理格式+正则 - 用户视图
-print("已处理格式+正则（用户视图）:")
-for msg in response.processed_prompt_with_regex:
-    sources = msg.get('_source_types', [])
-    print(f"  {msg['role']} (来源: {sources}): {msg['content']}")
-
-## 2.3 标准格式+正则 - API调用用（推荐）
-print("标准OpenAI格式+正则（推荐）:")
-clean_messages = response.clean_prompt_with_regex
-
-# 直接用于OpenAI API调用
-# import openai
-# openai_response = openai.ChatCompletion.create(
-#     model="gpt-3.5-turbo",
-#     messages=clean_messages  # 直接使用，无需转换
-# )
+# 3. 标准格式 (clean) - 两种视图（推荐用于API调用）
+if response.clean_prompt_with_regex:
+    ## 3.1 标准格式 - 用户视图
+    print("标准格式（用户视图）:")
+    for msg in response.clean_prompt_with_regex:
+        print(f"  {msg['role']}: {msg['content']}")
+    
+    ## 3.2 通过JSON输出访问 AI视图（推荐用于API调用）
+    print("通过JSON输出访问（标准格式 - 推荐用于API调用）:")
+    import json
+    response_data = json.loads(response.to_json())
+    clean_prompt = response_data.get('clean_prompt', [])
+    
+    # 直接用于OpenAI API调用
+    # import openai
+    # openai_response = openai.ChatCompletion.create(
+    #     model="gpt-4",
+    #     messages=clean_prompt  # 直接使用，无需转换
+    # )
 ```
 
 ## 宏系统API
