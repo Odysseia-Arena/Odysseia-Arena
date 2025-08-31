@@ -44,6 +44,7 @@ class ConfigManager:
         self.characters_dir = self.data_root / "characters"
         self.personas_dir = self.data_root / "personas"
         self.world_books_dir = self.data_root / "world_books"
+        self.regex_rules_dir = self.data_root / "regex_rules"
         
         # 确保目录存在
         self._ensure_directories()
@@ -54,8 +55,8 @@ class ConfigManager:
     
     def _ensure_directories(self) -> None:
         """确保所有必要目录存在"""
-        for directory in [self.configs_dir, self.presets_dir, self.characters_dir, 
-                         self.personas_dir, self.world_books_dir]:
+        for directory in [self.configs_dir, self.presets_dir, self.characters_dir,
+                         self.personas_dir, self.world_books_dir, self.regex_rules_dir]:
             directory.mkdir(parents=True, exist_ok=True)
     
     def create_config(self, config_id: str, name: str, description: str = "",
@@ -63,6 +64,7 @@ class ConfigManager:
                      character_file: Optional[str] = None,
                      persona_file: Optional[str] = None,
                      additional_world_book: Optional[str] = None,
+                     regex_rule_files: Optional[List[str]] = None,
                      tags: Optional[List[str]] = None) -> ChatConfig:
         """创建新的聊天配置"""
         
@@ -76,6 +78,14 @@ class ConfigManager:
             components["persona"] = self._validate_file_path(persona_file, self.personas_dir)
         if additional_world_book:
             components["additional_world_book"] = self._validate_file_path(additional_world_book, self.world_books_dir)
+        
+        # 验证正则规则文件
+        if regex_rule_files:
+            validated_rules = []
+            for rule_file in regex_rule_files:
+                validated_rules.append(self._validate_file_path(rule_file, self.regex_rules_dir))
+            if validated_rules:
+                components["regex_rules"] = validated_rules
         
         config = ChatConfig(
             config_id=config_id,
@@ -174,7 +184,7 @@ class ConfigManager:
             print(f"⚠️ 配置不存在: {config_id}")
     
     def load_chat_manager(self, config: ChatConfig) -> ChatHistoryManager:
-        """根据配置加载ChatHistoryManager"""
+        """根据配置加载ChatHistoryManager和相关组件"""
         
         # 加载角色卡数据
         character_data = {}
@@ -197,8 +207,25 @@ class ConfigManager:
             with open(persona_path, "r", encoding="utf-8") as f:
                 persona_data = json.load(f)
 
-        # 创建基础管理器
-        manager = create_chat_manager(character_data, preset_data, persona_data)
+        # 加载正则规则（如果有）
+        regex_rule_manager = None
+        if "regex_rules" in config.components and isinstance(config.components["regex_rules"], list):
+            from .regex_rule_manager import RegexRuleManager
+            regex_rule_manager = RegexRuleManager()
+            
+            for rule_file in config.components["regex_rules"]:
+                rule_path = self.regex_rules_dir / rule_file
+                if os.path.exists(rule_path):
+                    # 由于RegexRuleManager初始化时已经加载目录下的所有规则文件，
+                    # 这里我们可能需要额外的加载机制
+                    # 临时解决方案：创建一个加载单个文件的RegexRuleManager实例
+                    temp_manager = RegexRuleManager(str(rule_path))
+                    # 将规则从临时管理器合并到主管理器
+                    for rule in temp_manager.get_rules():
+                        regex_rule_manager.add_rule(rule)
+        
+        # 创建基础管理器，包含正则规则管理器
+        manager = create_chat_manager(character_data, preset_data, persona_data, regex_rule_manager)
         
         # 加载通用世界书（如果有）
         if "additional_world_book" in config.components:
@@ -277,7 +304,8 @@ class ConfigManager:
             "presets": self.presets_dir,
             "characters": self.characters_dir,
             "personas": self.personas_dir,
-            "world_books": self.world_books_dir
+            "world_books": self.world_books_dir,
+            "regex_rules": self.regex_rules_dir
         }
         
         if file_type not in type_dir_map:

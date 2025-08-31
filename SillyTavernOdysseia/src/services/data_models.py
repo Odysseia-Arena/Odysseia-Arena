@@ -172,3 +172,41 @@ class PresetPrompt:
     # 动态enabled支持
     enabled_expression: Any = None  # 存储原始enabled值（布尔值、宏或Python表达式）
     enabled_cached: Optional[bool] = None  # 缓存计算结果
+@dataclass
+class RegexRule:
+    """正则表达式替换规则的数据类"""
+    id: str  # 规则唯一标识符
+    name: str  # 规则名称
+    
+    # 核心正则表达式
+    find_regex: str  # 查找的正则表达式
+    replace_regex: str  # 替换的正则表达式
+    
+    enabled: bool = True  # 规则是否启用
+    
+    # 作用对象：指定规则适用的内容类型
+    targets: List[str] = field(default_factory=lambda: ["user", "assistant_response", "world_book", "preset", "assistant_thinking"])
+    
+    # 作用范围
+    min_depth: Optional[int] = None  # 生效的最小深度
+    max_depth: Optional[int] = None  # 生效的最大深度
+    min_order: Optional[int] = None  # 生效的最小order
+    max_order: Optional[int] = None  # 生效的最大order
+    
+    # 作用时机：决定规则在提示词构建过程中的应用时机
+    placement: str = "after_macro"  # 可选值: "before_macro_skip", "before_macro_include", "after_macro"
+    # before_macro_skip: 在宏处理前应用正则，但跳过宏的内部字符
+    # before_macro_include: 在宏处理前应用正则，包括宏的内部字符
+    # after_macro: 在宏处理后应用正则
+    
+    # 作用效果：决定规则如何影响提示词的不同视图
+    views: List[str] = field(default_factory=lambda: ["original"])  # 可选值: "original", "user_view", "assistant_view"
+    # original: 修改原始提示词
+    # user_view: 修改用户视图（用户看到的提示词）
+    # assistant_view: 修改AI模型视图（AI模型看到的提示词）
+    
+    # 规则描述
+    description: str = ""
+    
+    # 启用规则的条件表达式（可以是宏）
+    enabled_expression: Any = None

@@ -31,7 +31,7 @@ class ChatHistoryManager:
     聊天历史管理器 (协调器角色)
     """
     
-    def __init__(self, character_data: Dict[str, Any], persona_data: Dict[str, Any], preset_data: Dict[str, Any]):
+    def __init__(self, character_data: Dict[str, Any], persona_data: Dict[str, Any], preset_data: Dict[str, Any], regex_rule_manager=None):
         # 核心数据
         self.character_data: Dict[str, Any] = character_data
         self.persona_data: Dict[str, Any] = persona_data
@@ -48,7 +48,14 @@ class ChatHistoryManager:
         self.macro_manager = MacroManager(self.character_data, self.persona_data, shared_sandbox=self.sandbox)
         self.code_executor = CodeExecutor(self.macro_manager)
         self.evaluator = DynamicEvaluator(self.macro_manager)
-        self.prompt_builder = PromptBuilder(self.evaluator, self.code_executor, self.macro_manager, self.character_data, self.persona_data)
+        self.prompt_builder = PromptBuilder(
+            self.evaluator,
+            self.code_executor,
+            self.macro_manager,
+            self.character_data,
+            self.persona_data,
+            regex_rule_manager=regex_rule_manager
+        )
 
         # 加载数据
         self._load_data(preset_data)
@@ -176,10 +183,14 @@ class ChatHistoryManager:
                 self.triggered_entries.add(entry.id)
                 print(f"✅ 条件世界书条目已触发: {entry.name}")
 
-    def build_final_prompt(self) -> List[Dict[str, str]]:
+    def build_final_prompt(self, view_type: str = "original") -> List[Dict[str, str]]:
         """
         构建最终的提示词。
         这是对外暴露的主要方法，它将任务委托给PromptBuilder。
+        
+        Args:
+            view_type: 视图类型，可选值: "raw", "processed", "clean"
+                       分别对应不同处理阶段的视图，可以单独应用正则规则
         """
         if not self.enable_macros:
             # 如果禁用宏，可以提供一个简化的、不执行代码的构建路径
@@ -190,63 +201,36 @@ class ChatHistoryManager:
             chat_history=self.chat_history,
             world_book_entries=self.world_book_entries,
             preset_prompts=self.preset_prompts,
-            triggered_entries=self.triggered_entries
+            triggered_entries=self.triggered_entries,
+            view_type=view_type
         )
 
     def to_raw_openai_format(self) -> List[Dict[str, Any]]:
         """
         输出格式1: 最初未经过enabled判断的原始提示词
-        """
-        # 这个方法现在可以简化，因为它主要用于调试和展示
-        # 我们可以从 prompt_builder 中获取一个未经过滤的源列表
-        all_sources = self.prompt_builder._collect_all_sources(
-            self.chat_history, self.world_book_entries, self.preset_prompts, self.triggered_entries
-        )
         
-        raw_messages = []
-        for source in all_sources:
-            item = source["data"]
-            if source["type"] == "chat_history":
-                raw_messages.append(item.to_openai_format())
-            else:
-                role = MessageRole(source["role"]) if isinstance(source["role"], str) else source["role"]
-                message = ChatMessage(role=role)
-                # 根据用户要求，只为预设和世界书设置source_name
-                source_name = None
-                if source["type"] in ["preset", "world"]:
-                    source_name = getattr(item, 'name', '')
-                    
-                message.add_content_part(
-                    content=getattr(item, 'content', ''),
-                    source_type=source["type"],
-                    source_id=getattr(item, 'identifier', '') or str(getattr(item, 'id', '')),
-                    source_name=source_name
-                )
-                raw_messages.append(message.to_openai_format())
-        return raw_messages
+        这个视图对应 RegexRule 中的 "raw" 视图
+        """
+        # 直接使用 build_final_prompt 方法，指定视图类型为 "raw"
+        return self.build_final_prompt(view_type="raw")
 
     def to_processed_openai_format(self, execute_code: bool = True) -> List[Dict[str, Any]]:
         """
         输出格式2: 经过enabled判断和处理的提示词
+        
+        这个视图对应 RegexRule 中的 "processed" 视图
         """
         # execute_code 参数在这里被忽略，因为新的流程总是执行
-        return self.build_final_prompt()
+        return self.build_final_prompt(view_type="processed")
 
     def to_clean_openai_format(self, execute_code: bool = True) -> List[Dict[str, str]]:
         """
         输出格式3: 去掉来源信息的标准OpenAI格式
+        
+        这个视图对应 RegexRule 中的 "clean" 视图
         """
-        processed_messages = self.to_processed_openai_format(execute_code)
-        
-        clean_messages = []
-        for msg in processed_messages:
-            clean_msg = {
-                "role": msg["role"],
-                "content": msg["content"]
-            }
-            clean_messages.append(clean_msg)
-        
-        return clean_messages
+        # 直接使用 build_final_prompt 方法，指定视图类型为 "clean"
+        return self.build_final_prompt(view_type="clean")
 
     def reset_chat(self) -> None:
         """重置聊天状态"""
@@ -265,6 +249,6 @@ class ChatHistoryManager:
         }
 
 
-def create_chat_manager(character_data: Dict[str, Any], preset_data: Dict[str, Any], persona_data: Dict[str, Any]) -> ChatHistoryManager:
+def create_chat_manager(character_data: Dict[str, Any], preset_data: Dict[str, Any], persona_data: Dict[str, Any], regex_rule_manager=None) -> ChatHistoryManager:
     """创建并初始化ChatHistoryManager的工厂函数"""
-    return ChatHistoryManager(character_data=character_data, persona_data=persona_data, preset_data=preset_data)
+    return ChatHistoryManager(character_data=character_data, persona_data=persona_data, preset_data=preset_data, regex_rule_manager=regex_rule_manager)

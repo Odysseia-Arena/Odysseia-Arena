@@ -1,0 +1,120 @@
+[
+  {
+    "id": "original_view_rule",
+    "name": "原始视图规则",
+    "enabled": true,
+    "find_regex": "原始数据",
+    "replace_regex": "[原始数据已修改]",
+    "targets": ["user", "assistant_response", "world_book", "preset"],
+    "placement": "after_macro",
+    "views": ["original"],
+    "description": "修改原始数据，影响所有视图"
+  },
+  {
+    "id": "user_view_rule",
+    "name": "用户视图规则",
+    "enabled": true,
+    "find_regex": "敏感信息",
+    "replace_regex": "[敏感信息已隐藏]",
+    "targets": ["user", "assistant_response"],
+    "placement": "after_macro",
+    "views": ["user_view"],
+    "description": "隐藏敏感信息，只在用户视图中生效"
+  },
+  {
+    "id": "assistant_view_rule",
+    "name": "AI视图规则",
+    "enabled": true,
+    "find_regex": "^(.*)$",
+    "replace_regex": "$1\n\n[系统指令：请使用简洁清晰的语言回复]",
+    "targets": ["assistant_response"],
+    "placement": "after_macro",
+    "views": ["assistant_view"],
+    "description": "为AI添加额外指令，只在AI视图中生效"
+  },
+  {
+    "id": "multi_view_rule",
+    "name": "多视图规则",
+    "enabled": true,
+    "find_regex": "多视图内容",
+    "replace_regex": "[多视图内容已修改]",
+    "targets": ["user", "assistant_response"],
+    "placement": "after_macro",
+    "views": ["user_view", "assistant_view"],
+    "description": "同时修改用户视图和AI视图，但不修改原始数据"
+  },
+  {
+    "id": "before_macro_skip_rule",
+    "name": "宏处理前跳过规则",
+    "enabled": true,
+    "find_regex": "宏前内容",
+    "replace_regex": "[宏前内容已修改]",
+    "targets": ["preset", "world_book"],
+    "placement": "before_macro_skip",
+    "views": ["original"],
+    "description": "在宏处理前应用规则，但跳过宏内部"
+  },
+  {
+    "id": "before_macro_include_rule",
+    "name": "宏处理前包含规则",
+    "enabled": true,
+    "find_regex": "\\{\\{user\\}\\}",
+    "replace_regex": "{{current_user}}",
+    "targets": ["preset", "world_book"],
+    "placement": "before_macro_include",
+    "views": ["original"],
+    "description": "在宏处理前应用规则，包括宏内部"
+  },
+  {
+    "id": "depth_range_rule",
+    "name": "深度范围规则",
+    "enabled": true,
+    "find_regex": "深度测试",
+    "replace_regex": "[深度范围内]",
+    "targets": ["preset", "world_book"],
+    "placement": "after_macro",
+    "views": ["original"],
+    "min_depth": 2,
+    "max_depth": 5,
+    "description": "只在深度2-5范围内生效"
+  },
+  {
+    "id": "order_range_rule",
+    "name": "次序范围规则",
+    "enabled": true,
+    "find_regex": "次序测试",
+    "replace_regex": "[次序范围内]",
+    "targets": ["preset", "world_book"],
+    "placement": "after_macro",
+    "views": ["original"],
+    "min_order": 50,
+    "max_order": 150,
+    "description": "只在次序50-150范围内生效"
+  },
+  {
+    "id": "complex_regex_rule",
+    "name": "复杂正则规则",
+    "enabled": true,
+    "find_regex": "邮箱：([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,})",
+    "replace_regex": "邮箱：[已隐藏]",
+    "targets": ["user", "assistant_response"],
+    "placement": "after_macro",
+    "views": ["user_view"],
+    "description": "使用复杂正则表达式隐藏邮箱"
+  },
+  {
+    "id": "conditional_target_rule",
+    "name": "条件目标规则",
+    "enabled": true,
+    "find_regex": "条件测试",
+    "replace_regex": "[条件测试已修改]",
+    "targets": ["user", "assistant_response", "world_book"],
+    "placement": "after_macro",
+    "views": ["original"],
+    "min_depth": 1,
+    "max_depth": 10,
+    "min_order": 1,
+    "max_order": 1000,
+    "description": "同时使用多种条件限制规则应用范围"
+  }
+]

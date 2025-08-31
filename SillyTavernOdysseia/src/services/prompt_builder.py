@@ -10,16 +10,19 @@
 - 合并聊天历史 (chat history)
 - 应用动态 `enabled` 判断
 - 执行代码块
+- 应用正则表达式替换规则
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Union
+import re
+from typing import Any, Dict, List, Optional, Union, Tuple
 
 from .data_models import ChatMessage, MessageRole, PresetPrompt, WorldBookEntry
 from .dynamic_evaluator import DynamicEvaluator
 from .code_executor import CodeExecutor
 from .macro_manager import MacroManager
+from .regex_rule_manager import RegexRuleManager
 
 
 class PromptBuilder:
@@ -32,12 +35,19 @@ class PromptBuilder:
         macro_manager: MacroManager,
         character_data: Dict[str, Any],
         persona_data: Dict[str, Any],
+        regex_rule_manager: RegexRuleManager = None,
     ):
         self.evaluator = evaluator
         self.code_executor = code_executor
         self.macro_manager = macro_manager
         self.character_data = character_data
         self.persona_data = persona_data
+        self.regex_rule_manager = regex_rule_manager
+        
+        # 保存不同视图的提示词缓存
+        self.original_prompt: List[Dict[str, str]] = []  # 原始提示词（仅应用effect_type="original"的规则）
+        self.user_view_prompt: List[Dict[str, str]] = []  # 用户视图（应用effect_type="user_view"或"both_views"的规则）
+        self.assistant_view_prompt: List[Dict[str, str]] = []  # AI模型视图（应用effect_type="assistant_view"或"both_views"的规则）
 
     def build_final_prompt(
         self,
@@ -55,8 +65,10 @@ class PromptBuilder:
         3. 逐条目处理：
            a. 评估 `enabled` 状态。
            b. 如果启用，执行 `code_block`。
-           c. 处理 `content` 中的宏。
-           d. 生成消息。
+           c. 应用宏处理前的正则规则（before_macro_skip, before_macro_include）。
+           d. 处理 `content` 中的宏。
+           e. 应用宏处理后的正则规则（after_macro）。
+           f. 生成消息。
         4. 合并相邻的相同角色的消息。
         5. 返回最终的OpenAI格式消息列表。
         """
@@ -79,6 +91,8 @@ class PromptBuilder:
         for source in all_sources:
             item = source["data"]
             source_type = source["type"]
+            depth = source.get("depth")
+            order = source.get("order")
 
             # a. 评估 enabled 状态 (聊天历史消息总是启用)
             if not isinstance(item, ChatMessage):
@@ -94,7 +108,7 @@ class PromptBuilder:
                 self.evaluator.clear_enabled_cache(world_book_entries)
                 self.evaluator.clear_enabled_cache(preset_prompts)
 
-            # c. 处理 content 并生成消息
+            # c-e. 处理 content 并生成消息（包括正则处理）
             message = self._process_source_content(source, world_book_entries)
             if message:
                 processed_messages.append(message)
@@ -104,7 +118,13 @@ class PromptBuilder:
         
         print(f"🎉 动态构建完成，最终包含 {len(final_messages)} 个消息块")
         
-        # 5. 转换为最终输出格式
+        # 5. 应用不同视图的正则规则并保存各种视图
+        self._apply_view_specific_regex_rules(final_messages)
+        
+        # 5. 应用不同视图的正则规则并保存各种视图
+        self._apply_view_specific_regex_rules(final_messages)
+        
+        # 6. 返回最终的OpenAI格式消息列表
         return [msg.to_openai_format() for msg in final_messages]
 
     def _collect_all_sources(
@@ -177,9 +197,14 @@ class PromptBuilder:
         """处理单个来源的内容并生成ChatMessage"""
         item = source["data"]
         source_type = source["type"]
+        depth = source.get("depth")
+        order = source.get("order")
         
         if source_type == "chat_history":
             # 聊天历史消息直接返回，宏已经在发送时处理
+            # 但如果有正则规则管理器，仍需应用正则规则
+            if self.regex_rule_manager and item:
+                self._apply_regex_to_chat_message(item, depth, order)
             return item
 
         content = self._resolve_special_content(item, world_book_entries)
@@ -187,9 +212,27 @@ class PromptBuilder:
             # 跳过完全空的内容
             return None
 
+        # 应用宏处理前的正则替换（如果有）
+        if self.regex_rule_manager:
+            # before_macro_skip: 跳过宏的内部字符
+            content = self._apply_regex_before_macro_skip(content, source_type, depth, order)
+            
+            # before_macro_include: 包括宏的内部字符
+            content = self._apply_regex_before_macro_include(content, source_type, depth, order)
+
         # 处理宏
         scope = "preset" if source_type == "preset" else "world"
         processed_content = self.macro_manager.process_string(content, scope)
+
+        # 应用宏处理后的正则替换（如果有）
+        if self.regex_rule_manager:
+            processed_content = self.regex_rule_manager.apply_regex_to_content(
+                content=processed_content,
+                source_type=source_type,
+                depth=depth,
+                order=order,
+                placement="after_macro"
+            )
 
         if not processed_content.strip():
             return None
@@ -273,6 +316,248 @@ class PromptBuilder:
             "user": MessageRole.USER,
         }
         return mapping.get(position, MessageRole.SYSTEM)
+
+    def _apply_regex_before_macro_skip(self, content: str, source_type: str, depth: Optional[int] = None, order: Optional[int] = None, view: str = "original") -> str:
+        """
+        应用宏处理前的正则替换，但跳过宏的内部字符
+        
+        这是一个复杂的处理：先找到所有宏，保存它们的位置，
+        将宏替换为临时标记，应用正则，然后将宏放回原位。
+        """
+        if not self.regex_rule_manager or not content:
+            return content
+            
+        # 1. 找到所有宏
+        macro_pattern = r'\{\{([^{}]*)\}\}'
+        macros = []
+        
+        # 查找所有宏，记录位置和内容
+        for match in re.finditer(macro_pattern, content):
+            macros.append({
+                "start": match.start(),
+                "end": match.end(),
+                "content": match.group(0)
+            })
+        
+        if not macros:
+            # 没有宏，直接应用正则
+            return self.regex_rule_manager.apply_regex_to_content(
+                content=content,
+                source_type=source_type,
+                depth=depth,
+                order=order,
+                placement="before_macro_skip",
+                view=view
+            )
+        
+        # 2. 用占位符替换宏
+        placeholder_pattern = "___MACRO_PLACEHOLDER_{}_____"
+        result = content
+        offset = 0
+        
+        for i, macro in enumerate(macros):
+            placeholder = placeholder_pattern.format(i)
+            start = macro["start"] + offset
+            end = macro["end"] + offset
+            
+            # 替换宏为占位符
+            result = result[:start] + placeholder + result[end:]
+            
+            # 更新偏移量
+            offset += len(placeholder) - (end - start)
+        
+        # 3. 应用正则替换
+        result = self.regex_rule_manager.apply_regex_to_content(
+            content=result,
+            source_type=source_type,
+            depth=depth,
+            order=order,
+            placement="before_macro_skip",
+            view=view
+        )
+        
+        # 4. 将宏放回
+        for i, macro in enumerate(macros):
+            placeholder = placeholder_pattern.format(i)
+            result = result.replace(placeholder, macro["content"])
+        
+        return result
+
+    def _apply_regex_before_macro_include(self, content: str, source_type: str, depth: Optional[int] = None, order: Optional[int] = None, view: str = "original") -> str:
+        """
+        应用宏处理前的正则替换，包括宏的内部字符
+        
+        这个简单许多，直接应用正则即可。
+        """
+        if not self.regex_rule_manager:
+            return content
+            
+        return self.regex_rule_manager.apply_regex_to_content(
+            content=content,
+            source_type=source_type,
+            depth=depth,
+            order=order,
+            placement="before_macro_include",
+            view=view
+        )
+        
+    def _apply_regex_to_chat_message(self, message: ChatMessage, depth: Optional[int] = None, order: Optional[int] = None, view: str = "original") -> None:
+        """
+        对聊天消息的每个内容部分应用正则规则
+        
+        修改是就地进行的，不返回新消息。
+        """
+        if not self.regex_rule_manager or not message or not message.content_parts:
+            return
+            
+        # 对每个内容部分分别应用正则规则
+        for part in message.content_parts:
+            # 只处理宏处理后阶段，因为聊天历史的宏已经在发送时处理过了
+            processed_content = self.regex_rule_manager.apply_regex_to_content_part(
+                content_part=part,
+                depth=depth,
+                order=order,
+                placement="after_macro",
+                view=view
+            )
+            
+            # 更新内容部分
+            part.content = processed_content
+    
+    def _apply_view_specific_regex_rules(self, messages: List[ChatMessage]) -> None:
+        """
+        应用不同视图的正则规则，并保存各种输出格式
+        
+        视图类型:
+        - original: 修改原始提示词（直接修改底层数据）
+        - user_view: 只修改用户视图的提示词（用户看到的提示词）
+        - assistant_view: 只修改AI模型视图的提示词（AI模型看到的提示词）
+        
+        对应到API输出:
+        - raw_prompt: 应用original视图规则后的原始提示词
+        - processed_prompt: 应用user_view视图规则后的提示词
+        - clean_prompt: 应用assistant_view视图规则后的提示词
+        """
+        if not self.regex_rule_manager:
+            # 无正则规则管理器，所有视图都使用相同的原始消息
+            self.original_prompt = [msg.to_openai_format() for msg in messages]
+            self.user_view_prompt = self.original_prompt
+            self.assistant_view_prompt = self.original_prompt
+            return
+            
+        # 复制原始消息，用于不同视图
+        original_messages = messages
+        user_view_messages = [self._clone_chat_message(msg) for msg in messages]
+        assistant_view_messages = [self._clone_chat_message(msg) for msg in messages]
+        
+        # 应用各种视图的规则
+        # 1. 处理 original 视图规则（修改原始提示词）
+        for msg in original_messages:
+            for part in msg.content_parts:
+                part.content = self.regex_rule_manager.apply_regex_to_content(
+                    content=part.content,
+                    source_type=part.source_type,
+                    placement="after_macro",  # 这里使用after_macro是因为在ChatMessage上已经处理过宏
+                    view="original"
+                )
+                
+        # 2. 处理 user_view 视图规则（用户看到的提示词）
+        for msg in user_view_messages:
+            for part in msg.content_parts:
+                part.content = self.regex_rule_manager.apply_regex_to_content(
+                    content=part.content,
+                    source_type=part.source_type,
+                    placement="after_macro",
+                    view="user_view"
+                )
+                
+        # 3. 处理 assistant_view 视图规则（AI模型看到的提示词）
+        for msg in assistant_view_messages:
+            for part in msg.content_parts:
+                part.content = self.regex_rule_manager.apply_regex_to_content(
+                    content=part.content,
+                    source_type=part.source_type,
+                    placement="after_macro",
+                    view="assistant_view"
+                )
+                
+        # 转换为OpenAI格式并保存各视图
+        self.original_prompt = [msg.to_openai_format() for msg in original_messages]
+        self.user_view_prompt = [msg.to_openai_format() for msg in user_view_messages]
+        self.assistant_view_prompt = [msg.to_openai_format() for msg in assistant_view_messages]
+        
+    def _apply_view_specific_regex(self, content: str, source_type: str, views: List[str]) -> str:
+        """
+        应用特定视图的正则规则
+        
+        Args:
+            content: 要处理的内容
+            source_type: 内容的来源类型
+            effect_types: 要应用的效果类型列表
+            
+        Returns:
+            处理后的内容
+        """
+        if not self.regex_rule_manager:
+            return content
+            
+        result = content
+        
+        # 获取所有适用的规则
+        for rule in self.regex_rule_manager.get_rules():
+            if not rule.enabled:
+                continue
+                
+            # 检查是否有匹配的视图
+            has_matching_view = False
+            for view in views:
+                if view in rule.views:
+                    has_matching_view = True
+                    break
+                    
+            if not has_matching_view:
+                continue
+                
+            # 检查目标类型是否匹配
+            target_mapping = {
+                "conversation": "user" if "user_message" in content else "assistant_response",
+                "world": "world_book",
+                "preset": "preset",
+                "char": "assistant_thinking"
+            }
+            
+            target = target_mapping.get(source_type, "unknown")
+            if target not in rule.targets:
+                continue
+                
+            # 应用规则
+            try:
+                if rule.id in self.regex_rule_manager.compiled_rules:
+                    compiled_pattern = self.regex_rule_manager.compiled_rules[rule.id]["pattern"]
+                    replace_pattern = self.regex_rule_manager.compiled_rules[rule.id]["replace"]
+                    result = compiled_pattern.sub(replace_pattern, result)
+            except Exception as e:
+                print(f"⚠️ 应用视图特定规则失败 [{rule.id}]: {e}")
+                
+        return result
+        
+    def _clone_chat_message(self, message: ChatMessage) -> ChatMessage:
+        """创建聊天消息的深度副本"""
+        new_message = ChatMessage(role=message.role)
+        
+        # 复制内容部分
+        for part in message.content_parts:
+            new_message.add_content_part(
+                content=part.content,
+                source_type=part.source_type,
+                source_id=part.source_id,
+                source_name=part.source_name
+            )
+            
+        # 复制元数据
+        new_message.metadata = message.metadata.copy() if message.metadata else {}
+        
+        return new_message
 
     def _get_world_info_content(self, world_book_entries: List[WorldBookEntry], position: str) -> str:
         """获取特定位置的世界书内容"""

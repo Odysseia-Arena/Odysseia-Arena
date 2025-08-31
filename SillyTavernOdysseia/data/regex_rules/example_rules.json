@@ -1,0 +1,50 @@
+[
+  {
+    "id": "rule_1",
+    "name": "将用户称呼替换为尊称",
+    "enabled": true,
+    "find_regex": "用户",
+    "replace_regex": "尊敬的用户",
+    "targets": ["assistant_response"],
+    "views": ["raw"],
+    "macro_interaction": "after_macro",
+    "priority": 10,
+    "description": "使AI回复中的'用户'变为更礼貌的'尊敬的用户'"
+  },
+  {
+    "id": "rule_2",
+    "name": "检测并替换邮箱格式",
+    "enabled": true,
+    "find_regex": "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\\b",
+    "replace_regex": "[邮箱已隐藏]",
+    "targets": ["user", "assistant_response"],
+    "views": ["processed"],
+    "macro_interaction": "after_macro",
+    "priority": 5,
+    "description": "在处理视图中隐藏邮箱地址，相当于用户端视图"
+  },
+  {
+    "id": "rule_3",
+    "name": "在宏处理前替换特定字符串",
+    "enabled": true,
+    "find_regex": "特殊标记",
+    "replace_regex": "已处理的特殊标记",
+    "targets": ["preset", "world_book"],
+    "views": ["processed", "clean"],
+    "macro_interaction": "before_macro_include",
+    "priority": 1,
+    "description": "在宏处理前替换特定字符串，应用于处理和清理视图，相当于两种端视图"
+  },
+  {
+    "id": "rule_4",
+    "name": "在保留宏的情况下替换内容",
+    "enabled": true,
+    "find_regex": "关键词A(.+?)关键词B",
+    "replace_regex": "前缀$1后缀",
+    "targets": ["preset", "user", "assistant_response"],
+    "views": ["clean"],
+    "macro_interaction": "before_macro_skip",
+    "priority": 20,
+    "description": "在宏处理前替换内容，但保留宏，应用于清理视图，相当于AI模型端视图"
+  }
+]

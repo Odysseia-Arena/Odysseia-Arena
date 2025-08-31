@@ -1,0 +1,18 @@
+[
+  {
+    "id": "83a46d0c-f509-4839-94af-7f6ea4e76e39",
+    "name": "【Dreammini】1.添加输入tag",
+    "enabled": true,
+    "find_regex": "^([\\s\\S]*)$",
+    "replace_regex": "<input>\n\\1\n</input>",
+    "targets": [
+      "user"
+    ],
+    "placement": "after_macro",
+    "views": [
+      "original"
+    ],
+    "max_depth": 1,
+    "description": "仅对提示词生效"
+  }
+]
