@@ -50,6 +50,11 @@
     - **为什么**: 确保AI响应也经过完整的系统处理流程，使宏和正则规则能够作用于AI生成的内容，实现一致的内容处理体验。
     - **工作流程**: input消息 + assistant_response → 系统处理（宏、正则） → 提取处理后的assistant响应 → 添加到最终输出的两个视图中。
 
+6.  **🌟 新：角色消息视图处理 (Character Messages View Processing)**
+    - **是什么**: 当无用户输入时，`character_messages` 字段现在返回经过完整处理的消息块格式，包含 `user_view` 和 `assistant_view` 两个视图。
+    - **为什么**: 确保角色卡的初始消息也经过系统的完整处理流程，包括上下文构建、宏处理和正则规则处理，提供一致的内容处理体验。
+    - **格式**: `{"user_view": [{"role": "assistant", "content": "..."}], "assistant_view": [{"role": "assistant", "content": "..."}]}`
+
 ## 🚀 **核心API：高级接口（推荐）**
 
 我们强烈推荐使用 `ChatAPI` 提供的 `chat_input_json` 方法作为与系统交互的主要方式。它封装了所有底层复杂性，提供了最强大和最灵活的功能。
@@ -131,7 +136,17 @@ welcome_request = {
 welcome_response = api.chat_input_json(welcome_request)
 if welcome_response.is_character_message:
     print("\n✅ 角色欢迎语:")
-    print(welcome_response.character_messages)
+    # 新格式：character_messages包含两个视图
+    user_messages = welcome_response.character_messages['user_view']
+    assistant_messages = welcome_response.character_messages['assistant_view']
+    
+    print("用户视图消息:")
+    for msg in user_messages:
+        print(f"  {msg['role']}: {msg['content']}")
+    
+    print("AI视图消息:")
+    for msg in assistant_messages:
+        print(f"  {msg['role']}: {msg['content']}")
 
 # 🌟 查看assistant_response处理结果
 print("\n✅ Assistant响应处理结果:")
@@ -205,7 +220,7 @@ class ChatResponse:
     clean_prompt_with_regex: Optional[List[Dict[str, str]]] = None     # 标准格式的用户视图
     
     is_character_message: bool = False          # 是否为角色卡消息
-    character_messages: Optional[List[str]] = None  # 角色卡的所有message（当无用户输入时）
+    character_messages: Optional[Dict[str, List[Dict[str, str]]]] = None  # 角色卡消息的两个视图（完整消息块格式）
     processing_info: Dict[str, Any] = field(default_factory=dict)  # 处理信息（调试用）
     request: Optional[ChatRequest] = None       # 原始请求信息
 ```

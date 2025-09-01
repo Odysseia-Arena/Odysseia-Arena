@@ -92,11 +92,36 @@
       }
     ]
   },
-  "character_messages": [
-    "你好！我是测试角色，很高兴见到你！",
-    "嗨！有什么我可以帮助你的吗？",
-    "欢迎！让我们开始愉快的对话吧！"
-  ],
+  "character_messages": {
+    "user_view": [
+      {
+        "role": "assistant",
+        "content": "你好！我是测试角色，很高兴见到你！"
+      },
+      {
+        "role": "assistant",
+        "content": "嗨！有什么我可以帮助你的吗？"
+      },
+      {
+        "role": "assistant",
+        "content": "欢迎！让我们开始愉快的对话吧！"
+      }
+    ],
+    "assistant_view": [
+      {
+        "role": "assistant",
+        "content": "你好！我是测试角色，很高兴见到你！"
+      },
+      {
+        "role": "assistant",
+        "content": "嗨！有什么我可以帮助你的吗？"
+      },
+      {
+        "role": "assistant",
+        "content": "欢迎！让我们开始愉快的对话吧！"
+      }
+    ]
+  },
   "request": {
     "session_id": "demo_character_msg",
     "config_id": "test_config",
@@ -147,11 +172,36 @@
       }
     ]
   },
-  "character_messages": [
-    "你好！我是测试角色，很高兴见到你！",
-    "嗨！有什么我可以帮助你的吗？",
-    "欢迎！让我们开始愉快的对话吧！"
-  ],
+  "character_messages": {
+    "user_view": [
+      {
+        "role": "assistant",
+        "content": "你好！我是测试角色，很高兴见到你！"
+      },
+      {
+        "role": "assistant",
+        "content": "嗨！有什么我可以帮助你的吗？"
+      },
+      {
+        "role": "assistant",
+        "content": "欢迎！让我们开始愉快的对话吧！"
+      }
+    ],
+    "assistant_view": [
+      {
+        "role": "assistant",
+        "content": "你好！我是测试角色，很高兴见到你！"
+      },
+      {
+        "role": "assistant",
+        "content": "嗨！有什么我可以帮助你的吗？"
+      },
+      {
+        "role": "assistant",
+        "content": "欢迎！让我们开始愉快的对话吧！"
+      }
+    ]
+  },
   "request": {
     "session_id": "demo_character_msg_clean",
     "config_id": "test_config",
@@ -163,9 +213,10 @@
 
 ### 🔑 关键特征（input为空时）
 - `is_character_message`: `true`
-- 包含 `character_messages` 字段：角色卡的初始消息数组
+- 包含 `character_messages` 字段：经过完整处理的角色卡初始消息，包含`user_view`和`assistant_view`两个视图
 - 提示词主要包含系统消息（角色描述、世界书等）
 - 没有用户对话内容
+- `character_messages`经过宏处理和正则规则处理，包含完整上下文
 
 ---
 
@@ -477,7 +528,16 @@
     "formats_generated": ["clean"]
   },
   "clean_prompt": {
-    "user_view": null,
+    "user_view": [
+      {
+        "role": "user",
+        "content": "请告诉我当前状态"
+      },
+      {
+        "role": "assistant",
+        "content": "当前状态：active，随机数：1"
+      }
+    ],
     "assistant_view": [
       {
         "role": "user",
@@ -518,8 +578,9 @@
 | 字段 | input为空 | input不为空 | 带Assistant Response |
 |------|-----------|-------------|---------------------|
 | `is_character_message` | `true` | `false` | `false` |
-| `character_messages` | ✅ 角色卡消息数组 | ❌ 不存在 | ❌ 不存在 |
+| `character_messages` | ✅ 完整消息块格式，包含两个视图 | ❌ 不存在 | ❌ 不存在 |
 | `processing_info.message_count` | ✅ 角色卡消息数 | ❌ 不存在 | ❌ 不存在 |
+| `processing_info.character_messages_processed` | ✅ `true` | ❌ 不存在 | ❌ 不存在 |
 | `processing_info.input_message_count` | ❌ 不存在 | ✅ 输入消息数 | ✅ 输入消息数 |
 | `processing_info.assistant_response_processed` | ❌ 不存在 | ❌ 不存在 | ✅ `true` |
 | 提示词内容 | 系统消息为主 | 系统+用户消息 | 用户+处理后助手消息 |
@@ -531,8 +592,13 @@
 // 判断响应类型
 if (response.is_character_message) {
   // 角色卡初始消息
-  const characterMessages = response.character_messages;
-      const systemPrompt = response.clean_prompt.assistant_view;
+  const userViewMessages = response.character_messages.user_view;
+  const assistantViewMessages = response.character_messages.assistant_view;
+  const systemPrompt = response.clean_prompt.assistant_view;
+  
+  // character_messages现在是完整的消息块格式，可直接发送给AI
+  // userViewMessages: 用户看到的格式（可能包含隐藏的调试信息等）
+  // assistantViewMessages: 发送给AI的格式（标准OpenAI格式）
 } else {
   // 普通对话
   const conversation = response.clean_prompt.assistant_view;

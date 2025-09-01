@@ -1,5 +1,45 @@
 # 更新日志
 
+## v2.3.0 - 2025-01-21
+
+### 🎯 重大功能改进
+
+#### 🌟 新：双视图处理全面升级
+
+##### Assistant Response处理修复
+- **修复**: 修复了带`assistant_response`处理时`user_view`为null的严重问题
+- **改进**: 现在`assistant_response`处理正确返回`user_view`和`assistant_view`两个视图
+- **一致性**: 与其他格式保持完全一致的视图结构
+- **兼容性**: 向前兼容，不影响现有功能
+
+##### Character Messages双视图处理
+- **重大改进**: `character_messages`从简单字符串数组升级为完整的双视图格式
+- **新格式**: `{"user_view": [{"role": "assistant", "content": "..."}], "assistant_view": [...]}`
+- **完整处理**: 角色卡消息现在经过完整的上下文构建、宏处理和正则规则处理
+- **API一致性**: 与`assistant_response`处理使用相同的处理流程和输出格式
+
+#### 📊 处理信息增强
+- **新增**: `character_messages_processed`标记，指示角色消息已经过处理
+- **新增**: 更详细的处理统计信息
+- **改进**: 更准确的视图构建逻辑
+
+### 🔧 技术改进
+- **重构**: 视图构建逻辑统一化和优化
+- **新增**: `_build_character_messages_with_context`方法
+- **新增**: `_extract_character_message_from_prompt`方法
+- **改进**: 错误处理和回退机制
+
+### 📚 文档更新
+- **更新**: `API_EXAMPLES.md`中的所有相关示例
+- **更新**: `API.md`中的数据结构和概念说明
+- **新增**: 双视图处理的完整使用指南
+- **改进**: 前端集成建议和最佳实践
+
+### 🎯 向前兼容性
+- **保证**: 现有的非`character_messages`功能完全不受影响
+- **保证**: 旧格式处理逻辑保持稳定
+- **升级**: 新功能自动激活，无需配置变更
+
 ## v2.2.0 - 2025-01-01
 
 ### 🎯 重大新功能

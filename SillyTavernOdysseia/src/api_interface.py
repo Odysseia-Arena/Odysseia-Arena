@@ -136,7 +136,7 @@ class ChatResponse:
 
     
     is_character_message: bool = False  # 是否为角色卡消息
-    character_messages: Optional[List[str]] = None  # 角色卡的所有message（当无用户输入时）
+    character_messages: Optional[Dict[str, List[Dict[str, str]]]] = None  # 角色卡消息的两个视图（完整消息块格式）
     processing_info: Dict[str, Any] = field(default_factory=dict)  # 处理信息（调试用）
     request: Optional[ChatRequest] = None  # 原始请求信息
     
@@ -151,25 +151,52 @@ class ChatResponse:
             'processing_info': self.processing_info
         }
         
-        # 对每种请求的输出格式，都提供用户视图和AI视图
-        # 无论请求哪种格式，都会返回两个视图
-        if self.raw_prompt_with_regex is not None:
-            response_data['raw_prompt'] = {
-                'user_view': self.processed_prompt_with_regex,
-                'assistant_view': self.clean_prompt_with_regex
-            }
+        # 检查是否是assistant_response处理模式
+        is_assistant_response_processing = self.processing_info.get('assistant_response_processed', False)
         
-        if self.processed_prompt_with_regex is not None:
-            response_data['processed_prompt'] = {
-                'user_view': self.processed_prompt_with_regex,
-                'assistant_view': self.clean_prompt_with_regex
-            }
-        
-        if self.clean_prompt_with_regex is not None:
-            response_data['clean_prompt'] = {
-                'user_view': self.processed_prompt_with_regex,
-                'assistant_view': self.clean_prompt_with_regex
-            }
+        if is_assistant_response_processing:
+            # Assistant Response处理模式：需要特殊构建视图
+            # 对于assistant_response处理，我们需要从结果中提取并构建正确的user_view和assistant_view
+            
+            if self.raw_prompt_with_regex is not None:
+                user_view, assistant_view = self._build_views_for_assistant_response(self.raw_prompt_with_regex)
+                response_data['raw_prompt'] = {
+                    'user_view': user_view,
+                    'assistant_view': assistant_view
+                }
+            
+            if self.processed_prompt_with_regex is not None:
+                user_view, assistant_view = self._build_views_for_assistant_response(self.processed_prompt_with_regex)
+                response_data['processed_prompt'] = {
+                    'user_view': user_view,
+                    'assistant_view': assistant_view
+                }
+            
+            if self.clean_prompt_with_regex is not None:
+                user_view, assistant_view = self._build_views_for_assistant_response(self.clean_prompt_with_regex)
+                response_data['clean_prompt'] = {
+                    'user_view': user_view,
+                    'assistant_view': assistant_view
+                }
+        else:
+            # 普通处理模式：user_view和assistant_view相同（保持兼容性）
+            if self.raw_prompt_with_regex is not None:
+                response_data['raw_prompt'] = {
+                    'user_view': self.raw_prompt_with_regex,
+                    'assistant_view': self.raw_prompt_with_regex
+                }
+            
+            if self.processed_prompt_with_regex is not None:
+                response_data['processed_prompt'] = {
+                    'user_view': self.processed_prompt_with_regex,
+                    'assistant_view': self.processed_prompt_with_regex
+                }
+            
+            if self.clean_prompt_with_regex is not None:
+                response_data['clean_prompt'] = {
+                    'user_view': self.clean_prompt_with_regex,
+                    'assistant_view': self.clean_prompt_with_regex
+                }
             
 
         # 添加角色卡消息
@@ -186,6 +213,118 @@ class ChatResponse:
             }
         
         return json.dumps(response_data, ensure_ascii=False, indent=2)
+    
+    def _build_views_for_assistant_response(self, prompt_data):
+        """为assistant_response处理构建user_view和assistant_view
+        
+        Args:
+            prompt_data: 提示词数据，可能是list格式或dict格式
+            
+        Returns:
+            tuple: (user_view, assistant_view)
+        """
+        if isinstance(prompt_data, list):
+            # 如果是list格式，需要分离出原始input和处理后的assistant_response
+            # 并构建正确的user_view和assistant_view
+            
+            # 提取assistant响应
+            processed_assistant = self._extract_assistant_response_from_data(prompt_data)
+            
+            # 提取原始input（除了assistant_response之外的消息）
+            original_input = []
+            for msg in prompt_data:
+                # 检查是否是assistant_response_processing消息
+                source_identifiers = msg.get('_source_identifiers', [])
+                is_assistant_processing = any(
+                    isinstance(sid, str) and 'assistant_response_processing' in sid
+                    for sid in source_identifiers
+                )
+                if not is_assistant_processing:
+                    # 构建原始input消息
+                    original_input.append({
+                        'role': msg.get('role', 'user'),
+                        'content': msg.get('content', '')
+                    })
+            
+            # 使用_build_final_output_helper构建视图
+            if processed_assistant:
+                return self._build_final_output_helper(
+                    original_input, processed_assistant, prompt_data
+                )
+            else:
+                # 如果没有找到processed_assistant，返回原始数据
+                return prompt_data, prompt_data
+        elif isinstance(prompt_data, dict) and 'user_view' in prompt_data and 'assistant_view' in prompt_data:
+            # 如果已经是dict格式且包含两个视图，直接返回
+            return prompt_data['user_view'], prompt_data['assistant_view']
+        else:
+            # 其他情况，视为标准格式
+            return prompt_data, prompt_data
+    
+    def _extract_assistant_response_from_data(self, prompt_data):
+        """从提示词数据中提取处理后的assistant响应"""
+        for message in prompt_data:
+            # 查找包含特殊标识符的消息
+            source_identifiers = message.get('_source_identifiers', [])
+            for sid in source_identifiers:
+                if isinstance(sid, str) and 'assistant_response_processing' in sid:
+                    return {
+                        'role': message.get('role', 'assistant'),
+                        'content': message.get('content', '')
+                    }
+        return None
+        
+    def _build_final_output_helper(self, original_input, processed_assistant, clean_prompt):
+        """构建包含处理后assistant响应的最终输出
+        
+        Args:
+            original_input: 原始输入消息列表
+            processed_assistant: 处理后的assistant响应
+            clean_prompt: clean格式的完整提示词
+            
+        Returns:
+            Tuple[用户视图, Assistant视图]
+        """
+        # 用户视图：原始input + 处理后的assistant响应（保留元数据）
+        user_view = []
+        
+        # 添加原始input消息（转换为标准格式）
+        for msg in original_input:
+            user_view.append({
+                'role': msg['role'],
+                'content': msg['content'],
+                '_source_types': ['conversation'],
+                '_source_identifiers': ['input_history']
+            })
+        
+        # 添加处理后的assistant响应
+        if processed_assistant:
+            assistant_msg = {
+                'role': processed_assistant['role'],
+                'content': processed_assistant['content'],
+                '_source_types': ['conversation'],
+                '_source_identifiers': ['assistant_response_processed']  # 标记为已处理的assistant响应
+            }
+            user_view.append(assistant_msg)
+        
+        # AI视图：原始input + 处理后的assistant响应（标准OpenAI格式，无元数据）
+        assistant_view = []
+        
+        # 添加原始input消息
+        for msg in original_input:
+            assistant_view.append({
+                'role': msg['role'],
+                'content': msg['content']
+            })
+        
+        # 添加处理后的assistant响应
+        if processed_assistant:
+            assistant_view.append({
+                'role': processed_assistant['role'],
+                'content': processed_assistant['content']
+            })
+        
+        return user_view, assistant_view
 
 
 class ChatAPI:
@@ -362,24 +501,29 @@ class ChatAPI:
     def _handle_character_message(self, session_id: str, manager: ChatHistoryManager, output_formats: List[str]) -> ChatResponse:
         """处理角色卡消息（无用户输入）"""
         
-        # 获取角色卡的message字段
-        character_messages = []
+        # 获取角色卡的原始message字段
+        raw_character_messages = []
         if manager.character_data and "message" in manager.character_data:
             message_data = manager.character_data["message"]
             if isinstance(message_data, list):
-                character_messages = message_data
+                raw_character_messages = message_data
             elif isinstance(message_data, str):
-                character_messages = [message_data]
+                raw_character_messages = [message_data]
+        
+        # 构建经过完整处理的character_messages（包含上下文、宏和正则处理）
+        processed_character_messages = self._build_character_messages_with_context(
+            session_id, manager, raw_character_messages
+        )
         
         # 无论用户请求哪种格式，我们都需要生成用户视图和AI视图
         # 始终生成processed_with_regex (用户视图) 和 clean_with_regex (AI视图)
-        processed_prompt_with_regex = manager.to_processed_with_regex_format()
-        clean_prompt_with_regex = manager.to_clean_with_regex_format()
+        processed_prompt_with_regex = manager.build_final_prompt(view_type="processed_with_regex")
+        clean_prompt_with_regex = manager.build_final_prompt(view_type="clean_with_regex")
         
         # 根据请求的格式生成原始视图 (如需要)
         raw_prompt_with_regex = None
         if "raw" in output_formats:
-            raw_prompt_with_regex = manager.to_raw_with_regex_format()
+            raw_prompt_with_regex = manager.build_final_prompt(view_type="raw_with_regex")
         
         return ChatResponse(
             source_id=session_id,
@@ -387,10 +531,11 @@ class ChatAPI:
             processed_prompt_with_regex=processed_prompt_with_regex,
             clean_prompt_with_regex=clean_prompt_with_regex,
             is_character_message=True,
-            character_messages=character_messages,
+            character_messages=processed_character_messages,
             processing_info={
                 "config_loaded": True,
-                "message_count": len(character_messages),
+                "message_count": len(raw_character_messages),
+                "character_messages_processed": True,
                 "output_formats": output_formats,
                 "prompt_blocks_raw_with_regex": len(raw_prompt_with_regex) if raw_prompt_with_regex else 0,
                 "prompt_blocks_processed_with_regex": len(processed_prompt_with_regex) if processed_prompt_with_regex else 0,
@@ -774,6 +919,100 @@ class ChatAPI:
         except Exception as e:
             print(f"⚠️ 列出配置失败: {e}")
             return []
+    
+    def _build_character_messages_with_context(self, session_id: str, manager: ChatHistoryManager, raw_character_messages: List[str]) -> Dict[str, List[Dict[str, str]]]:
+        """为character_messages构建包含上下文的user_view和assistant_view
+        
+        Args:
+            session_id: 会话ID
+            manager: ChatHistoryManager实例
+            raw_character_messages: 原始角色消息列表
+            
+        Returns:
+            Dict包含user_view和assistant_view两个键，每个键对应处理后的完整消息块列表
+        """
+        user_view_messages = []
+        assistant_view_messages = []
+        
+        for raw_message in raw_character_messages:
+            # 为每个character message创建特殊的ChatMessage
+            character_msg = ChatMessage(role=MessageRole.ASSISTANT)
+            character_msg.add_content_part(
+                content=raw_message,
+                source_type='conversation', 
+                source_id='character_message_processing',
+                source_name='Character Message Processing'
+            )
+            
+            # 备份原始对话历史
+            original_history = list(manager.chat_history)
+            
+            try:
+                # 将character message设置为临时历史记录
+                manager.chat_history = [character_msg]
+                
+                # 通过PromptBuilder构建包含完整上下文的提示词
+                processed_prompt = manager.build_final_prompt(view_type="processed_with_regex")
+                clean_prompt = manager.build_final_prompt(view_type="clean_with_regex")
+                
+                # 从processed和clean格式中提取处理后的character message
+                processed_char_msg = self._extract_character_message_from_prompt(processed_prompt)
+                clean_char_msg = self._extract_character_message_from_prompt(clean_prompt)
+                
+                # 构建完整的消息块格式
+                if processed_char_msg:
+                    user_view_messages.append({
+                        'role': 'assistant',
+                        'content': processed_char_msg
+                    })
+                else:
+                    # 出错时使用原始消息
+                    user_view_messages.append({
+                        'role': 'assistant',
+                        'content': raw_message
+                    })
+                    
+                if clean_char_msg:
+                    assistant_view_messages.append({
+                        'role': 'assistant',
+                        'content': clean_char_msg
+                    })
+                else:
+                    # 出错时使用原始消息
+                    assistant_view_messages.append({
+                        'role': 'assistant',
+                        'content': raw_message
+                    })
+                    
+            except Exception as e:
+                print(f"⚠️ 处理character message时出错: {e}")
+                # 出错时使用原始消息块格式
+                user_view_messages.append({
+                    'role': 'assistant',
+                    'content': raw_message
+                })
+                assistant_view_messages.append({
+                    'role': 'assistant',
+                    'content': raw_message
+                })
+            finally:
+                # 恢复原始对话历史
+                manager.chat_history = original_history
+        
+        return {
+            'user_view': user_view_messages,
+            'assistant_view': assistant_view_messages
+        }
+    
+    def _extract_character_message_from_prompt(self, prompt_data: List[Dict[str, Any]]) -> Optional[str]:
+        """从提示词数据中提取处理后的character message"""
+        for message in prompt_data:
+            # 查找包含特殊标识符的消息
+            source_identifiers = message.get('_source_identifiers', [])
+            for sid in source_identifiers:
+                if isinstance(sid, str) and 'character_message_processing' in sid:
+                    return message.get('content', '')
+        return None
 
 
 # 便捷函数
