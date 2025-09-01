@@ -2,6 +2,8 @@
 
 本文档描述了SillyTavern Odysseia的完整API，包括核心功能、**健壮的Python沙盒系统**、作用域感知的宏处理等高级特性。
 
+📖 **完整示例文档**: [API_EXAMPLES.md](API_EXAMPLES.md) - 包含所有场景的详细请求和响应示例
+
 ## 🎉 **项目状态**
 
 本项目实现了一个统一的Python API接口，封装了完整的聊天系统功能。系统核心功能已实现，但仍在持续迭代和重构以提升代码质量和可维护性。
@@ -143,7 +145,7 @@ for message in processed_messages:
 # 尽管仍然可用，但功能有限，推荐迁移到JSON接口
 legacy_response = api.chat_input(session_id="legacy_session", config_id="your_config_id", user_input="你好！")
 print("\n✅ 传统接口响应 (processed_prompt):")
-print(legacy_response.final_prompt)
+print(legacy_response.processed_prompt_with_regex)
 ```
 
 #### 接口定义
@@ -202,9 +204,6 @@ class ChatResponse:
     processed_prompt_with_regex: Optional[List[Dict[str, Any]]] = None # 处理后格式的用户视图
     clean_prompt_with_regex: Optional[List[Dict[str, str]]] = None     # 标准格式的用户视图
     
-    # 向后兼容字段
-    final_prompt: Optional[List[Dict[str, Any]]] = None     # 现在指向processed_prompt_with_regex
-    
     is_character_message: bool = False          # 是否为角色卡消息
     character_messages: Optional[List[str]] = None  # 角色卡的所有message（当无用户输入时）
     processing_info: Dict[str, Any] = field(default_factory=dict)  # 处理信息（调试用）
@@ -221,15 +220,15 @@ class ChatResponse:
   // 根据请求的输出格式，包含以下一个或多个字段
   "raw_prompt": {
     "user_view": [...],  // 用户视图的提示词
-    "ai_view": [...]     // AI视图的提示词
+    "assistant_view": [...]     // AI视图的提示词
   },
   "processed_prompt": {
     "user_view": [...],  // 用户视图的提示词
-    "ai_view": [...]     // AI视图的提示词
+    "assistant_view": [...]     // AI视图的提示词
   },
   "clean_prompt": {
     "user_view": [...],  // 用户视图的提示词
-    "ai_view": [...]     // AI视图的提示词
+    "assistant_view": [...]     // AI视图的提示词
   }
 }
 ```

@@ -133,8 +133,7 @@ class ChatResponse:
     processed_prompt_with_regex: Optional[List[Dict[str, Any]]] = None  # 格式2: 处理后提示词+正则
     clean_prompt_with_regex: Optional[List[Dict[str, str]]] = None  # 格式3: 标准格式+正则
     
-    # 向后兼容字段
-    final_prompt: Optional[List[Dict[str, Any]]] = None  # 默认指向processed_prompt_with_regex
+
     
     is_character_message: bool = False  # 是否为角色卡消息
     character_messages: Optional[List[str]] = None  # 角色卡的所有message（当无用户输入时）
@@ -157,25 +156,22 @@ class ChatResponse:
         if self.raw_prompt_with_regex is not None:
             response_data['raw_prompt'] = {
                 'user_view': self.processed_prompt_with_regex,
-                'ai_view': self.clean_prompt_with_regex
+                'assistant_view': self.clean_prompt_with_regex
             }
         
         if self.processed_prompt_with_regex is not None:
             response_data['processed_prompt'] = {
                 'user_view': self.processed_prompt_with_regex,
-                'ai_view': self.clean_prompt_with_regex
+                'assistant_view': self.clean_prompt_with_regex
             }
         
         if self.clean_prompt_with_regex is not None:
             response_data['clean_prompt'] = {
                 'user_view': self.processed_prompt_with_regex,
-                'ai_view': self.clean_prompt_with_regex
+                'assistant_view': self.clean_prompt_with_regex
             }
             
-        # 向后兼容字段
-        if self.final_prompt is not None:
-            response_data['final_prompt'] = self.final_prompt
-        
+
         # 添加角色卡消息
         if self.character_messages is not None:
             response_data['character_messages'] = self.character_messages
@@ -328,10 +324,6 @@ class ChatAPI:
             # 错误处理
             return ChatResponse(
                 source_id=request.session_id,
-                final_prompt=[{
-                    "role": "system",
-                    "content": f"处理错误: {str(e)}"
-                }],
                 processing_info={
                     "error": str(e),
                     "config_id": request.config_id,
@@ -389,15 +381,11 @@ class ChatAPI:
         if "raw" in output_formats:
             raw_prompt_with_regex = manager.to_raw_with_regex_format()
         
-        # 向后兼容：final_prompt现在指向processed_prompt_with_regex
-        final_prompt = processed_prompt_with_regex
-        
         return ChatResponse(
             source_id=session_id,
             raw_prompt_with_regex=raw_prompt_with_regex,
             processed_prompt_with_regex=processed_prompt_with_regex,
             clean_prompt_with_regex=clean_prompt_with_regex,
-            final_prompt=final_prompt,  # 向后兼容
             is_character_message=True,
             character_messages=character_messages,
             processing_info={
@@ -458,9 +446,6 @@ class ChatAPI:
         if "raw" in output_formats:
             raw_prompt_with_regex = manager.to_raw_with_regex_format()
         
-        # 向后兼容：final_prompt现在指向processed_prompt_with_regex
-        final_prompt = processed_prompt_with_regex
-        
         # 保存对话状态
         self._save_conversation(session_id, manager)
         
@@ -469,7 +454,6 @@ class ChatAPI:
             raw_prompt_with_regex=raw_prompt_with_regex,
             processed_prompt_with_regex=processed_prompt_with_regex,
             clean_prompt_with_regex=clean_prompt_with_regex,
-            final_prompt=final_prompt,  # 向后兼容
             is_character_message=False,
             processing_info={
                 "input_message_count": len(input_messages),
@@ -522,7 +506,7 @@ class ChatAPI:
             raw_prompt_with_regex=result_data.get("raw"),
             processed_prompt_with_regex=result_data.get("processed"),
             clean_prompt_with_regex=result_data.get("clean"),
-            final_prompt=result_data.get("processed", result_data.get("clean")),  # 向后兼容
+
             is_character_message=False,
             processing_info={
                 "input_message_count": len(input_messages),
@@ -645,7 +629,7 @@ class ChatAPI:
             clean_prompt: clean格式的完整提示词
             
         Returns:
-            Tuple[用户视图, AI视图]
+            Tuple[用户视图, Assistant视图]
         """
         # 用户视图：原始input + 处理后的assistant响应（保留元数据）
         user_view = []
@@ -670,23 +654,23 @@ class ChatAPI:
             user_view.append(assistant_msg)
         
         # AI视图：原始input + 处理后的assistant响应（标准OpenAI格式，无元数据）
-        ai_view = []
+        assistant_view = []
         
         # 添加原始input消息
         for msg in original_input:
-            ai_view.append({
+            assistant_view.append({
                 'role': msg['role'],
                 'content': msg['content']
             })
         
         # 添加处理后的assistant响应
         if processed_assistant:
-            ai_view.append({
+            assistant_view.append({
                 'role': processed_assistant['role'],
                 'content': processed_assistant['content']
             })
         
-        return user_view, ai_view
+        return user_view, assistant_view
     
     def _save_conversation(self, session_id: str, manager: ChatHistoryManager) -> None:
         """保存对话状态"""
@@ -833,12 +817,12 @@ if __name__ == "__main__":
     print("\n=== 获取角色卡消息 ===")
     response = api.chat_input(session_id, config_id, user_input=None)
     print(f"角色卡消息: {response.character_messages}")
-    print(f"提示词块数: {len(response.final_prompt)}")
+    print(f"提示词块数: {len(response.processed_prompt_with_regex)}")
     
     # 2. 用户输入对话
     print("\n=== 用户对话 ===")
     response = api.chat_input(session_id, config_id, "你好！")
-    print(f"最终提示词长度: {len(response.final_prompt)}")
+    print(f"最终提示词长度: {len(response.processed_prompt_with_regex)}")
     print(f"处理信息: {response.processing_info}")
     
     # 3. 添加AI回复
