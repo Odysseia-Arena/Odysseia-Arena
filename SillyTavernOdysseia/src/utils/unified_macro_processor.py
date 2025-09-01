@@ -396,7 +396,20 @@ setglobalvar = lambda name, value: global_vars.update({name: value}) or ""
     def _execute_traditional_macro(self, macro_content: str, scope_type: str) -> str:
         """执行传统宏（转换为Python代码）"""
         
-        # 解析宏名称和参数
+        # 🔧 修复：检查是否是函数调用语法（如 setvar('status', 'active')）
+        if '(' in macro_content and ')' in macro_content:
+            # 尝试直接作为Python表达式执行
+            if any(func_name in macro_content for func_name in ['setvar', 'getvar', 'addvar', 'incvar', 'decvar', 'getglobalvar', 'setglobalvar']):
+                # 为函数调用添加 result = 前缀
+                python_code = f"result = {macro_content.strip()}"
+                result = self.sandbox.execute_code(python_code, scope_type=scope_type)
+                if result.success:
+                    return str(result.result) if result.result is not None else ""
+                else:
+                    print(f"⚠️ 函数调用宏执行失败: {result.error}")
+                    # 如果函数调用失败，尝试传统转换方式
+        
+        # 解析传统宏名称和参数
         if ':' in macro_content:
             parts = macro_content.split(':', 1)
             macro_name = parts[0].strip()

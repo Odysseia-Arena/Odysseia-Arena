@@ -7,7 +7,7 @@ SillyTavern Odysseia的Python沙盒系统提供：
 - **完全向后兼容**：无缝支持现有SillyTavern宏
 - **安全的执行环境**：严格的沙盒限制，防止恶意代码
 - **智能作用域管理**：根据上下文自动选择正确的变量作用域
-- **简洁的来源追踪**：通过`_source_types`和`_source_names`字段进行轻量级来源标记
+- **简洁的来源追踪**：通过`_source_types`、`_source_names`和`_source_identifiers`字段进行轻量级来源标记
 
 ## 🏗️ 系统架构
 
@@ -289,6 +289,7 @@ def to_clean_openai_format(self) -> List[Dict[str, str]]:
 #### 1. 简洁的来源追踪
 - **类型标记**: `_source_types` 标识内容来源类型（preset/world/conversation等）
 - **名称标记**: `_source_names` 仅对预设和世界书提供有意义的名称
+- **标识符标记**: `_source_identifiers` 提供详细的位置和特殊标识符信息
 - **三种格式**: raw（调试）、processed（分析）、clean（API调用）
 
 #### 2. 作用域感知处理

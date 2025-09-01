@@ -29,9 +29,24 @@
     - **是什么**: 变量根据其来源（预设、角色卡、世界书等）存储在不同的作用域中。系统通过前缀（如 `world_status`, `preset_config`）或上下文自动识别并访问正确作用域的变量。
     - **为什么**: 实现了清晰的变量隔离和管理。系统配置、角色状态、世界环境等信息互不干扰，同时又提供了灵活的跨作用域访问能力，使宏和代码逻辑更健壮、更易于维护。
 
-3.  **多视图输出 (Multi-View Output)**
-    - **是什么**: API可以一次性返回三种不同格式的提示词：`raw` (原始)、`processed` (处理后) 和 `clean` (纯净)。
-    - **为什么**: 满足不同应用场景的需求。`raw` 视图用于深度调试；`processed` 视图保留了来源信息，适合前端展示或分析；`clean` 视图是标准的OpenAI格式，可直接用于调用语言模型API。此外，正则规则还可以针对不同视图进行操作，实现更精细的控制。
+3.  **三阶段提示词处理 (Three-Stage Prompt Processing)**
+    - **是什么**: API采用清晰的三阶段处理流程：`raw` (原始)、`processed` (处理后) 和 `clean` (纯净)。
+    - **为什么**: 满足不同应用场景的需求。`raw` 视图用于深度调试；`processed` 视图保留了来源信息，适合前端展示或分析；`clean` 视图是标准的OpenAI格式，可直接用于调用语言模型API。
+    - **三阶段流程**:
+      - **Raw阶段**: 返回最原始的提示词，未执行宏和正则处理，用户视图和AI视图完全相同
+      - **Processed阶段**: 基于Raw阶段，按顺序执行：正则处理(宏前) → 宏和代码执行 → 正则处理(宏后)
+      - **Clean阶段**: 基于Processed阶段，执行相邻role合并等清理操作，输出标准OpenAI格式
+
+4.  **正则规则智能跳过 (Relative Field Skipping)**
+    - **是什么**: 正则规则在执行时会自动跳过具有"relative"位置标识的内容部分，确保只处理有`depth`参数的聊天内容。
+    - **为什么**: 相对位置的内容（如`systemPrompt:relative`、`worldInfoAfter:relative`）通常是固定的系统提示，不应被正则规则修改，避免意外的内容变更。
+    - **实现机制**: 通过检查消息的`_source_identifiers`字段，任何包含`:relative`后缀的标识符都会被跳过正则处理。
+    - **示例**: `["main:relative", "worldInfoBefore:relative"]` 这样的消息不会被正则规则处理，而 `["user_input:in-chat:depth_1"]` 会正常处理。
+
+5.  **🌟 新：Assistant响应处理 (Assistant Response Processing)**
+    - **是什么**: 通过 `assistant_response` 字段，可以让系统处理AI的响应内容，包括宏执行、正则替换等，然后将处理后的结果添加到最终输出中。
+    - **为什么**: 确保AI响应也经过完整的系统处理流程，使宏和正则规则能够作用于AI生成的内容，实现一致的内容处理体验。
+    - **工作流程**: input消息 + assistant_response → 系统处理（宏、正则） → 提取处理后的assistant响应 → 添加到最终输出的两个视图中。
 
 ## 🚀 **核心API：高级接口（推荐）**
 
@@ -60,8 +75,30 @@ conversation_request = {
     "output_formats": ["clean", "processed"]  # 请求获取纯净格式和处理后格式
 }
 
+# 🌟 新功能：包含assistant_response的请求
+conversation_with_response_request = {
+    "session_id": "user_session_456", 
+    "config_id": "your_config_id",
+    "input": [
+        {"role": "user", "content": "你好，我想了解Python宏。"}
+    ],
+    "assistant_response": {  # 新增：AI的响应，将被处理后添加到最终输出
+        "role": "assistant",
+        "content": "当然！Python宏很强大：{{python:print('Hello')}} 以及变量：{{setvar('greeting', 'Hi there!')}}"
+    },
+    "output_formats": ["processed"]  # 不同格式有不同行为，详见下方说明
+}
+
+# Assistant Response功能在不同output_formats下的行为：
+# - "raw": 仅将assistant_response原样追加到input消息末尾，无宏和正则处理
+# - "processed": 完整处理assistant_response（宏+正则），返回包含系统提示的完整提示词
+# - "clean": 提取完全处理后的assistant_response，追加到原始input消息，返回标准OpenAI格式
+
 # 3. 发送请求并获取响应
 response = api.chat_input_json(conversation_request)
+
+# 🌟 使用assistant_response功能
+response_with_processing = api.chat_input_json(conversation_with_response_request)
 
 # 4. 使用响应结果
 # 4.1. clean_prompt: 直接用于调用语言模型API
@@ -73,7 +110,13 @@ print(response.clean_prompt)
 print("\n✅ Processed Prompt (用于分析和调试):")
 for message in response.processed_prompt:
     source_types = message.get('_source_types', [])
-    print(f"  - Role: {message['role']}, Sources: {source_types}")
+    source_identifiers = message.get('_source_identifiers', [])
+    source_names = message.get('_source_names', [])
+    print(f"  - Role: {message['role']}")
+    print(f"    来源类型: {source_types}")
+    print(f"    具体标识符: {source_identifiers}")
+    if source_names:
+        print(f"    来源名称: {source_names}")
     print(f"    Content: {message['content'][:80]}...") # 打印部分内容
 
 # 5. 获取角色欢迎语（无输入历史）
@@ -87,6 +130,14 @@ welcome_response = api.chat_input_json(welcome_request)
 if welcome_response.is_character_message:
     print("\n✅ 角色欢迎语:")
     print(welcome_response.character_messages)
+
+# 🌟 查看assistant_response处理结果
+print("\n✅ Assistant响应处理结果:")
+processed_messages = response_with_processing.processed_prompt
+for message in processed_messages:
+    if message.get('_source_identifiers') and 'assistant_response_processed' in message.get('_source_identifiers', []):
+        print(f"  - 处理后的Assistant响应: {message['content']}")
+        # 可以看到宏已被执行，正则已被应用
 
 # 6. (向后兼容) 传统接口
 # 尽管仍然可用，但功能有限，推荐迁移到JSON接口
@@ -212,8 +263,35 @@ class ChatResponse:
 | 格式 | 特点 | 用途 |
 |------|------|------|
 | **raw** | 包含所有条目，未经enabled过滤 | 全量调试 |
-| **processed** | 已处理但保留_source_types等元数据 | 分析、开发调试 |
+| **processed** | 已处理但保留_source_types、_source_identifiers等元数据 | 分析、开发调试 |
 | **clean** | 纯OpenAI格式，只包含role和content | AI API调用（推荐） |
+
+##### 扩展字段说明
+
+**Raw** 和 **Processed** 格式包含以下扩展字段来提供详细的来源信息：
+
+| 字段 | 类型 | 说明 | 示例 |
+|------|------|------|------|
+| `_source_types` | Array<string> | 来源类型列表，标识内容的广泛分类 | `["preset", "world", "conversation"]` |
+| `_source_names` | Array<string> | 来源名称列表，仅预设和世界书提供有意义的名称 | `["主要系统提示", "魔法世界设定"]` |
+| `_source_identifiers` | Array<string> | 具体标识符列表，包含详细的位置和特殊标识符信息 | `["main:relative", "worldInfoBefore:relative", "world_entry_123"]` |
+
+**`_source_identifiers` 字段详细说明：**
+
+- **位置标识符**: `identifier:position` 格式
+  - `main:relative` - 相对定位的主要预设
+  - `charDescription:in-chat` - 插入到聊天历史的角色描述
+  
+- **特殊标识符**: 
+  - `worldInfoBefore:relative` - 世界书前置内容
+  - `worldInfoAfter:relative` - 世界书后置内容
+  - `charDescription:relative` - 角色描述
+  - `personaDescription:relative` - 用户角色描述
+  
+- **世界书标识符**: 
+  - `world_entry_1`, `world_entry_2` - 具体的世界书条目ID
+
+**Clean** 格式会过滤掉所有以下划线开头的扩展字段，只保留标准的 `role` 和 `content` 字段。
 
 ##### 正则规则视图系统
 
@@ -315,7 +393,11 @@ if response.processed_prompt_with_regex:
     print("处理后格式（用户视图）:")
     for msg in response.processed_prompt_with_regex:
         sources = msg.get('_source_types', [])
-        print(f"  {msg['role']} (来源: {sources}): {msg['content']}")
+        identifiers = msg.get('_source_identifiers', [])
+        names = msg.get('_source_names', [])
+        print(f"  {msg['role']} (来源: {sources}, 标识: {identifiers}): {msg['content']}")
+        if names:
+            print(f"    来源名称: {names}")
     
     ## 2.2 通过JSON输出访问 AI视图
     print("通过JSON输出访问（处理后格式）:")

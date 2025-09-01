@@ -9,8 +9,52 @@
 - **灵活的作用范围**：可以针对特定深度、次序和内容类型的提示词应用规则
 - **多种处理时机**：在宏处理前或后应用，可以选择跳过或包含宏内部字符
 - **不同视图类型**：可以只修改某一种视图的提示词，不影响其他视图
+- **智能跳过机制**：自动跳过relative位置的内容，确保只处理聊天历史和动态内容 ✨**新增**
 - **简化的规则排序**：移除了优先级字段，使规则排序更直观
 - **与酒馆格式兼容**：提供转换工具，支持从酒馆正则格式转换
+
+## 🔒 **智能跳过机制 (Relative Field Skipping)** ✨**新增**
+
+### 工作原理
+
+正则规则系统具有智能跳过功能，会自动跳过具有"relative"位置标识的内容部分：
+
+```python
+# 示例：检查消息的_source_identifiers
+message = {
+    "role": "system",
+    "content": "你是一个AI助手",
+    "_source_identifiers": ["main:relative", "worldInfoBefore:relative"]
+}
+# 此消息会被跳过，不应用任何正则规则
+```
+
+### 跳过条件
+
+系统检查每个消息的`_source_identifiers`字段，如果包含任何以`:relative`结尾的标识符，则跳过正则处理：
+
+- `main:relative` - 主要预设（相对位置）
+- `systemPrompt:relative` - 系统提示（相对位置）
+- `worldInfoBefore:relative` - 世界书前置内容
+- `worldInfoAfter:relative` - 世界书后置内容
+- `charDescription:relative` - 角色描述
+- `personaDescription:relative` - 用户角色描述
+
+### 处理的内容
+
+只有具有以下标识符的内容会被正则规则处理：
+
+- `user_input:in-chat:depth_X` - 用户输入（聊天历史）
+- `assistant_response:in-chat:depth_X` - AI响应（聊天历史）
+- `world_entry_X` - 触发的世界书条目
+- `assistant_response_processing` - 处理中的AI响应
+
+### 设计目标
+
+这种设计确保：
+1. **稳定性**: 系统预设和固定内容不被意外修改
+2. **精确性**: 正则规则只作用于真正的聊天内容
+3. **可预测性**: 避免相对位置内容的不当变更
 
 ## 2. 正则规则数据结构
 

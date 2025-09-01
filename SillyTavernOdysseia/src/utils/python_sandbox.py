@@ -274,6 +274,65 @@ class PythonSandbox:
         if 'getvar' not in context:
             context['getvar'] = getvar
         
+        # 添加legacy函数支持传统宏
+        def legacy_roll(dice_expr: str) -> str:
+            """处理骰子表达式，如 '1d6' """
+            import random
+            try:
+                if 'd' not in dice_expr.lower():
+                    return "1"
+                
+                parts = dice_expr.lower().split('d')
+                if len(parts) != 2:
+                    return "1"
+                
+                num_dice = int(parts[0].strip()) if parts[0].strip() else 1
+                num_sides = int(parts[1].strip())
+                
+                # 限制范围防止滥用
+                num_dice = min(max(num_dice, 1), 20)
+                num_sides = min(max(num_sides, 2), 100)
+                
+                total = sum(random.randint(1, num_sides) for _ in range(num_dice))
+                return str(total)
+            except (ValueError, AttributeError):
+                return "1"
+        
+        def legacy_random(*choices) -> str:
+            """从选项中随机选择一个"""
+            import random
+            if not choices:
+                return ""
+            return str(random.choice(choices))
+        
+        def legacy_pick(*choices) -> str:
+            """从选项中随机选择一个（与legacy_random相同）"""
+            import random
+            if not choices:
+                return ""
+            return str(random.choice(choices))
+        
+        def legacy_string_op(operation: str, text: str) -> str:
+            """处理字符串操作"""
+            try:
+                if operation == 'upper':
+                    return text.upper()
+                elif operation == 'lower':
+                    return text.lower()
+                elif operation == 'length':
+                    return str(len(text))
+                elif operation == 'reverse':
+                    return text[::-1]
+                else:
+                    return text
+            except:
+                return text
+        
+        context['legacy_roll'] = legacy_roll
+        context['legacy_random'] = legacy_random
+        context['legacy_pick'] = legacy_pick
+        context['legacy_string_op'] = legacy_string_op
+        
         # 添加带前缀的函数
         for name, func in self.scope_manager.conversation_funcs.items():
             context[f"conv_{name}"] = func

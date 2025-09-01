@@ -106,6 +106,15 @@ class ChatMessage:
             if source_names:
                 result["_source_names"] = source_names
             
+            # 具体标识符列表（包含位置标识符和特殊标识符）
+            source_identifiers = []
+            for part in self.content_parts:
+                if part.source_id and part.source_id not in ["unknown", ""]:
+                    source_identifiers.append(part.source_id)
+            
+            if source_identifiers:
+                result["_source_identifiers"] = list(set(source_identifiers))  # 去重
+            
         return result
     
     def get_primary_source_type(self) -> str:

@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -29,6 +29,7 @@ class ChatRequest:
     session_id: str  # 会话ID，用于标识和存储对话历史
     config_id: str  # 配置ID，指定使用的预设、角色卡、额外世界书配置
     input: Optional[List[Dict[str, str]]] = None  # OpenAI格式的消息数组（完整对话历史）。如果为None，则返回角色卡的message字段内容
+    assistant_response: Optional[Dict[str, str]] = None  # 可选的assistant响应，将被处理后添加到最终输出
     output_formats: Optional[List[str]] = None  # 指定需要的输出格式列表
     views: Optional[List[str]] = None  # 指定需要的视图类型列表
     
@@ -45,6 +46,7 @@ class ChatRequest:
             session_id=data['session_id'],
             config_id=data['config_id'],
             input=data.get('input'),
+            assistant_response=data.get('assistant_response'),
             output_formats=data.get('output_formats'),
             views=data.get('views')
         )
@@ -56,6 +58,7 @@ class ChatRequest:
             'session_id': self.session_id,
             'config_id': self.config_id,
             'input': self.input,
+            'assistant_response': self.assistant_response,
             'output_formats': self.output_formats,
             'views': self.views
         }, ensure_ascii=False, indent=2)
@@ -85,6 +88,18 @@ class ChatRequest:
                     if not isinstance(msg.get('content', ''), str):
                         errors.append(f"input[{i}] content 必须是字符串")
         
+        # 验证assistant_response字段
+        if self.assistant_response is not None:
+            if not isinstance(self.assistant_response, dict):
+                errors.append("assistant_response 必须是字典对象或None")
+            else:
+                if 'role' not in self.assistant_response or 'content' not in self.assistant_response:
+                    errors.append("assistant_response 必须包含 'role' 和 'content' 字段")
+                if self.assistant_response.get('role') != 'assistant':
+                    errors.append("assistant_response role 必须是 'assistant'")
+                if not isinstance(self.assistant_response.get('content', ''), str):
+                    errors.append("assistant_response content 必须是字符串")
+        
         if self.output_formats is not None:
             if not isinstance(self.output_formats, list):
                 errors.append("output_formats 必须是列表或None")
@@ -93,6 +108,8 @@ class ChatRequest:
                 for fmt in self.output_formats:
                     if fmt not in valid_formats:
                         errors.append(f"无效的输出格式: '{fmt}'，支持的格式: {valid_formats}")
+                if len(self.output_formats) == 0:
+                    errors.append("output_formats 不能为空列表")
         
         if self.views is not None:
             if not isinstance(self.views, list):
@@ -300,7 +317,7 @@ class ChatAPI:
                 response = self._handle_character_message(request.session_id, manager, output_formats)
             else:
                 # 有输入消息，处理完整对话流程
-                response = self._handle_conversation_input(request.session_id, manager, request.input, output_formats)
+                response = self._handle_conversation_input(request.session_id, manager, request.input, request.assistant_response, output_formats)
             
             # 保存原始请求信息
             response.request = request
@@ -393,8 +410,18 @@ class ChatAPI:
             }
         )
     
-    def _handle_conversation_input(self, session_id: str, manager: ChatHistoryManager, input_messages: List[Dict[str, str]], output_formats: List[str]) -> ChatResponse:
+    def _handle_conversation_input(self, session_id: str, manager: ChatHistoryManager, input_messages: List[Dict[str, str]], assistant_response: Optional[Dict[str, str]], output_formats: List[str]) -> ChatResponse:
         """处理完整对话历史输入"""
+        
+        # 如果没有assistant_response，使用原有逻辑
+        if assistant_response is None:
+            return self._handle_standard_conversation(session_id, manager, input_messages, output_formats)
+        
+        # 如果有assistant_response，使用特殊处理逻辑
+        return self._handle_conversation_with_assistant_response(session_id, manager, input_messages, assistant_response, output_formats)
+    
+    def _handle_standard_conversation(self, session_id: str, manager: ChatHistoryManager, input_messages: List[Dict[str, str]], output_formats: List[str]) -> ChatResponse:
+        """处理标准对话（无assistant_response）"""
         
         # 🌟 将OpenAI格式的对话历史转换为内部ChatMessage格式
         converted_history = []
@@ -455,6 +482,211 @@ class ChatAPI:
                 "last_user_message": last_user_message
             }
         )
+    
+    def _handle_conversation_with_assistant_response(self, session_id: str, manager: ChatHistoryManager, input_messages: List[Dict[str, str]], assistant_response: Dict[str, str], output_formats: List[str]) -> ChatResponse:
+        """处理包含assistant_response的对话，根据output_formats返回不同的结果"""
+        
+        # 🌟 为不同的output_formats生成不同的结果
+        result_data = {}
+        # 备份原始对话历史，避免保存临时assistant_response
+        original_history = list(manager.chat_history)
+        
+        # ===== 处理 RAW 格式 =====
+        if "raw" in output_formats:
+            # RAW: 只把assistant_response原样加到input末尾，不进行任何处理
+            raw_result = self._build_raw_with_assistant_response(input_messages, assistant_response)
+            result_data["raw"] = raw_result
+        
+        # ===== 处理 PROCESSED 格式 =====
+        if "processed" in output_formats:
+            # PROCESSED: 对assistant_response进行完整处理，返回完整的提示词处理结果
+            processed_result = self._build_processed_with_assistant_response(
+                session_id, manager, input_messages, assistant_response
+            )
+            result_data["processed"] = processed_result
+        
+        # ===== 处理 CLEAN 格式 =====
+        if "clean" in output_formats:
+            # CLEAN: 提取处理后的assistant_response，拼接到原始input末尾
+            clean_result = self._build_clean_with_assistant_response(
+                session_id, manager, input_messages, assistant_response
+            )
+            result_data["clean"] = clean_result
+        
+        # 保存对话状态（使用原始input，不包含assistant_response）
+        manager.chat_history = original_history
+        self._save_conversation(session_id, manager)
+        
+        return ChatResponse(
+            source_id=session_id,
+            raw_prompt_with_regex=result_data.get("raw"),
+            processed_prompt_with_regex=result_data.get("processed"),
+            clean_prompt_with_regex=result_data.get("clean"),
+            final_prompt=result_data.get("processed", result_data.get("clean")),  # 向后兼容
+            is_character_message=False,
+            processing_info={
+                "input_message_count": len(input_messages),
+                "assistant_response_processed": True,
+                "output_formats": output_formats,
+                "formats_generated": list(result_data.keys())
+            }
+        )
+    
+    def _build_raw_with_assistant_response(self, input_messages: List[Dict[str, str]], assistant_response: Dict[str, str]) -> List[Dict[str, str]]:
+        """构建RAW格式：原始input + 未处理的assistant_response"""
+        result = input_messages.copy()
+        result.append({
+            "role": assistant_response["role"],
+            "content": assistant_response["content"]  # 原始内容，未处理宏和正则
+        })
+        return result
+    
+    def _build_processed_with_assistant_response(self, session_id: str, manager: ChatHistoryManager, input_messages: List[Dict[str, str]], assistant_response: Dict[str, str]) -> List[Dict[str, Any]]:
+        """构建PROCESSED格式：完整的提示词处理结果"""
+        
+        # 🌟 步骤1：将assistant_response添加到input末尾，并添加特殊标识
+        extended_input = input_messages.copy()
+        assistant_msg_with_marker = assistant_response.copy()
+        assistant_msg_with_marker['_special_source_id'] = 'assistant_response_processing'
+        extended_input.append(assistant_msg_with_marker)
+        
+        # 🌟 步骤2：将扩展后的input转换为ChatMessage格式
+        converted_history = []
+        for msg in extended_input:
+            role = MessageRole(msg['role']) if msg['role'] in ['system', 'user', 'assistant'] else MessageRole.USER
+            chat_msg = ChatMessage(role=role, content=msg['content'])  # 🔧 修复：设置向后兼容的content字段
+            
+            # 为特殊的assistant响应创建ChatMessage，添加特殊source_identifiers
+            if msg.get('_special_source_id') == 'assistant_response_processing':
+                chat_msg.add_content_part(
+                    content=msg['content'],
+                    source_type='conversation',
+                    source_id='assistant_response_processing',  # 特殊标识符
+                    source_name='Assistant Response Processing'
+                )
+            else:
+                # 统一使用add_content_part方法，确保一致性
+                chat_msg.add_content_part(
+                    content=msg['content'],
+                    source_type='conversation',
+                    source_id=f"input_{role.value}",  # 根据角色生成source_id
+                    source_name='Input History'
+                )
+            
+            converted_history.append(chat_msg)
+        
+        # 设置为manager的基准历史
+        manager.chat_history = converted_history
+        
+        # 找到最后一条用户消息用于条件世界书触发
+        last_user_message = None
+        for msg in reversed(input_messages):
+            if msg['role'] == 'user':
+                last_user_message = msg['content']
+                break
+        
+        # 检查条件世界书触发
+        if last_user_message:
+            manager._check_conditional_world_book(last_user_message)
+        
+        # 🌟 步骤3：返回完整的processed格式（包含系统提示、世界书等）
+        # 使用新的三阶段管线的"processed"视图，内部已包含正则阶段
+        return manager.to_processed_openai_format()
+    
+    def _build_clean_with_assistant_response(self, session_id: str, manager: ChatHistoryManager, input_messages: List[Dict[str, str]], assistant_response: Dict[str, str]) -> List[Dict[str, str]]:
+        """构建CLEAN格式：原始input + 提取出的处理后assistant_response"""
+        
+        # 先获取processed格式的完整结果
+        processed_result = self._build_processed_with_assistant_response(
+            session_id, manager, input_messages, assistant_response
+        )
+        
+        # 从processed结果中提取处理后的assistant响应
+        processed_assistant_response = self._extract_processed_assistant_response(processed_result)
+        
+        # 构建clean格式：原始input + 处理后的assistant响应（标准OpenAI格式，无元数据）
+        clean_result = []
+        
+        # 添加原始input消息
+        for msg in input_messages:
+            clean_result.append({
+                'role': msg['role'],
+                'content': msg['content']
+            })
+        
+        # 添加处理后的assistant响应
+        if processed_assistant_response:
+            clean_result.append({
+                'role': processed_assistant_response['role'],
+                'content': processed_assistant_response['content']
+            })
+        
+        return clean_result
+    
+    def _extract_processed_assistant_response(self, processed_prompt: List[Dict[str, Any]]) -> Optional[Dict[str, str]]:
+        """从processed格式的输出中提取处理后的assistant响应"""
+        for message in processed_prompt:
+            # 查找包含特殊标识符的消息
+            source_identifiers = message.get('_source_identifiers', [])
+            for sid in source_identifiers:
+                if isinstance(sid, str) and 'assistant_response_processing' in sid:
+                    return {
+                        'role': message.get('role', 'assistant'),
+                        'content': message.get('content', '')
+                    }
+        return None
+    
+    def _build_final_output_with_processed_assistant(self, original_input: List[Dict[str, str]], processed_assistant: Optional[Dict[str, str]], clean_prompt: List[Dict[str, str]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, str]]]:
+        """构建包含处理后assistant响应的最终输出
+        
+        Args:
+            original_input: 原始输入消息列表
+            processed_assistant: 处理后的assistant响应
+            clean_prompt: clean格式的完整提示词
+            
+        Returns:
+            Tuple[用户视图, AI视图]
+        """
+        # 用户视图：原始input + 处理后的assistant响应（保留元数据）
+        user_view = []
+        
+        # 添加原始input消息（转换为标准格式）
+        for msg in original_input:
+            user_view.append({
+                'role': msg['role'],
+                'content': msg['content'],
+                '_source_types': ['conversation'],
+                '_source_identifiers': ['input_history']
+            })
+        
+        # 添加处理后的assistant响应
+        if processed_assistant:
+            assistant_msg = {
+                'role': processed_assistant['role'],
+                'content': processed_assistant['content'],
+                '_source_types': ['conversation'],
+                '_source_identifiers': ['assistant_response_processed']  # 标记为已处理的assistant响应
+            }
+            user_view.append(assistant_msg)
+        
+        # AI视图：原始input + 处理后的assistant响应（标准OpenAI格式，无元数据）
+        ai_view = []
+        
+        # 添加原始input消息
+        for msg in original_input:
+            ai_view.append({
+                'role': msg['role'],
+                'content': msg['content']
+            })
+        
+        # 添加处理后的assistant响应
+        if processed_assistant:
+            ai_view.append({
+                'role': processed_assistant['role'],
+                'content': processed_assistant['content']
+            })
+        
+        return user_view, ai_view
     
     def _save_conversation(self, session_id: str, manager: ChatHistoryManager) -> None:
         """保存对话状态"""

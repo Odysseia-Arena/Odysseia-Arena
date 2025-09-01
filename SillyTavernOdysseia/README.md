@@ -19,6 +19,8 @@
 - **作用域感知**: 支持 `preset_`、`char_`、`world_` 等前缀，实现跨作用域的变量访问。
 - **顺序处理**: 严格按照 `enabled` -> `code_block` -> `content` 的顺序处理每个条目，保证依赖关系正确。
 - **完全兼容**: 无缝支持SillyTavern传统宏，并在后台自动转换为Python代码执行。
+- **🌟 新：函数调用语法**: 支持 `{{setvar('name', 'value')}}` 等现代语法，更直观灵活
+- **🌟 新：扩展宏库**: 新增骰子、随机选择、字符串操作等常用宏函数
 
 ### 🎛️ 动态enabled字段 ⭐ NEW
 - **智能条件**: 支持宏和Python表达式动态判断
@@ -32,6 +34,18 @@
 - **动态依赖**: 前面的代码执行可影响后面条目的enabled状态
 - **作用域感知**: 变量在正确的作用域中设置和获取
 - **统一接口**: 所有代码块通过统一的执行流程处理
+
+### ⚡ 三阶段提示词处理 ⭐ NEW
+- **Raw阶段**: 原始提示词，未经宏和正则处理，用于深度调试
+- **Processed阶段**: 完整处理流程，保留元数据，适合前端展示和分析
+- **Clean阶段**: 标准OpenAI格式，可直接用于AI模型调用
+- **智能跳过**: 正则规则自动跳过相对位置内容，确保系统稳定性
+
+### 🤖 Assistant Response处理 ⭐ NEW
+- **完整处理**: AI响应也可经过宏和正则处理流程
+- **灵活输出**: 支持raw、processed、clean三种输出格式
+- **无缝集成**: 处理后的响应自动添加到最终提示词中
+- **一致体验**: 确保AI响应与用户输入使用相同的处理逻辑
 
 ### 🔄 格式转换
 - **角色卡转换**: SillyTavern v3 → 简化格式
@@ -59,25 +73,56 @@ request = {
     "input": [
         {"role": "user", "content": "你好，{{char}}！现在是{{time}}。"},
         {"role": "assistant", "content": "你好！有什么可以帮助你的吗？"},
-        {"role": "user", "content": "我想设置一个变量 {{python:setvar('test_var', 123)}}"}
+        {"role": "user", "content": "设置变量：{{setvar('level', 5)}}，当前等级：{{getvar('level')}}"}
     ],
-    "output_formats": ["clean", "processed"] # 请求标准格式和带来源的格式
+    "output_formats": ["clean", "processed", "raw"] # 三阶段处理：原始、处理后、纯净
+}
+
+# 🌟 新功能：Assistant Response处理
+assistant_request = {
+    "session_id": "session_002", 
+    "config_id": "test_config",
+    "input": [
+        {"role": "user", "content": "请告诉我当前状态"}
+    ],
+    "assistant_response": {
+        "role": "assistant",
+        "content": "当前状态：{{setvar('status', 'active')}}{{getvar('status')}}，随机数：{{roll::1d6}}"
+    },
+    "output_formats": ["clean"]
 }
 
 # 3. 发送请求并获取响应
 response = api.chat_input_json(request)
+assistant_response = api.chat_input_json(assistant_request)
 
 # 4. 使用结果
+# 三阶段处理结果
+print("=== 三阶段处理结果 ===")
+if response.raw_prompt:
+    print("Raw (原始): 未处理的提示词")
+if response.processed_prompt:
+    print("Processed: 处理后带元数据的提示词")
 if response.clean_prompt:
-    print("--- 标准OpenAI格式 (可直接用于API调用) ---")
+    print("Clean: 标准OpenAI格式")
     for msg in response.clean_prompt:
         print(f"[{msg['role']}] {msg['content']}")
 
+# Assistant Response处理结果
+print("\n=== Assistant Response处理结果 ===")
+if assistant_response.clean_prompt:
+    print("处理后的完整对话:")
+    for msg in assistant_response.clean_prompt:
+        print(f"[{msg['role']}] {msg['content']}")
+        
+# 查看详细来源信息（可选）
 if response.processed_prompt:
-    print("\n--- 带来源信息的格式 (用于调试) ---")
+    print("\n=== 详细来源信息 (调试用) ===")
     for msg in response.processed_prompt:
         sources = msg.get('_source_types', [])
-        print(f"[{msg['role']}] (来源: {sources}) {msg['content']}")
+        identifiers = msg.get('_source_identifiers', [])
+        print(f"[{msg['role']}] 来源: {sources}, 标识: {identifiers}")
+        print(f"  内容: {msg['content'][:50]}...")
 ```
 
 ## 📁 项目结构
