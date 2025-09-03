@@ -143,31 +143,123 @@ def initialize_storage():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS battles (
                 battle_id TEXT PRIMARY KEY,
+                session_id TEXT,
                 battle_type TEXT NOT NULL,
-                prompt TEXT NOT NULL,
-                model_a_id TEXT NOT NULL REFERENCES models(model_id),
-                model_b_id TEXT NOT NULL REFERENCES models(model_id),
-                model_a_name TEXT NOT NULL,
-                model_b_name TEXT NOT NULL,
-                response_a TEXT NOT NULL,
-                response_b TEXT NOT NULL,
+                prompt TEXT,
+                model_a_id TEXT REFERENCES models(model_id),
+                model_b_id TEXT REFERENCES models(model_id),
+                model_a_name TEXT,
+                model_b_name TEXT,
+                response_a TEXT,
+                response_b TEXT,
                 status TEXT NOT NULL, -- pending_vote, completed
                 winner TEXT, -- model_a, model_b, tie
                 timestamp REAL NOT NULL,
                 created_at REAL NOT NULL,
-                discord_id TEXT -- 添加 discord_id 字段
+                discord_id TEXT, -- 添加 discord_id 字段
+                input TEXT, -- 添加 input 字段
+                revealed BOOLEAN DEFAULT 0 NOT NULL -- 是否已揭示模型名称
             );
         """)
 
-        # 迁移：为 battles 表添加 prompt_id 和 prompt_theme 字段
+        # 迁移：为 battles 表添加字段
         cursor.execute("PRAGMA table_info(battles)")
         battle_columns = [row["name"] for row in cursor.fetchall()]
         if 'prompt_id' not in battle_columns:
             cursor.execute("ALTER TABLE battles ADD COLUMN prompt_id TEXT;")
         if 'prompt_theme' not in battle_columns:
             cursor.execute("ALTER TABLE battles ADD COLUMN prompt_theme TEXT;")
+        if 'session_id' not in battle_columns:
+            cursor.execute("ALTER TABLE battles ADD COLUMN session_id TEXT;")
+        if 'input' not in battle_columns:
+            cursor.execute("ALTER TABLE battles ADD COLUMN input TEXT;")
+        if 'revealed' not in battle_columns:
+            logger.info("数据库迁移：正在为 'battles' 表添加 'revealed' 字段...")
+            cursor.execute("ALTER TABLE battles ADD COLUMN revealed BOOLEAN DEFAULT 0 NOT NULL;")
 
-        # 3. 投票历史表 (voting_history)
+        # 3. 创建会话表 (sessions) - 用于维护上下文
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                session_id TEXT PRIMARY KEY,
+                model_a_id TEXT,
+                model_b_id TEXT,
+                config_id_a TEXT,
+                config_id_b TEXT,
+                context_user TEXT,
+                context_assistant TEXT,
+                input TEXT,
+                character_messages_user_view TEXT,
+                character_messages_assistant_view TEXT,
+                character_messages_selected INTEGER,
+                generated_options TEXT,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
+        """)
+
+        # 迁移：为 sessions 表添加新字段
+        cursor.execute("PRAGMA table_info(sessions)")
+        session_columns = [row["name"] for row in cursor.fetchall()]
+        
+        # 添加新的模型和配置ID字段
+        if 'model_a_id' not in session_columns:
+            cursor.execute("ALTER TABLE sessions ADD COLUMN model_a_id TEXT;")
+        if 'model_b_id' not in session_columns:
+            cursor.execute("ALTER TABLE sessions ADD COLUMN model_b_id TEXT;")
+        if 'config_id_a' not in session_columns:
+            cursor.execute("ALTER TABLE sessions ADD COLUMN config_id_a TEXT;")
+        if 'config_id_b' not in session_columns:
+            cursor.execute("ALTER TABLE sessions ADD COLUMN config_id_b TEXT;")
+
+        # 添加新的字段
+        if 'character_messages_user_view' not in session_columns:
+            cursor.execute("ALTER TABLE sessions ADD COLUMN character_messages_user_view TEXT;")
+        if 'character_messages_assistant_view' not in session_columns:
+            cursor.execute("ALTER TABLE sessions ADD COLUMN character_messages_assistant_view TEXT;")
+        if 'character_messages_selected' not in session_columns:
+            cursor.execute("ALTER TABLE sessions ADD COLUMN character_messages_selected INTEGER;")
+        if 'generated_options' not in session_columns:
+            logger.info("数据库迁移：正在为 'sessions' 表添加 'generated_options' 字段...")
+            cursor.execute("ALTER TABLE sessions ADD COLUMN generated_options TEXT;")
+
+        if 'turn_count' not in session_columns:
+            logger.info("数据库迁移：正在为 'sessions' 表添加 'turn_count' 字段...")
+            cursor.execute("ALTER TABLE sessions ADD COLUMN turn_count INTEGER DEFAULT 0 NOT NULL;")
+        
+        if 'discord_id' not in session_columns:
+            logger.info("数据库迁移：正在为 'sessions' 表添加 'discord_id' 字段...")
+            cursor.execute("ALTER TABLE sessions ADD COLUMN discord_id TEXT;")
+        
+        # 迁移数据：将旧的character_messages转换为新格式
+        if 'character_messages' in session_columns:
+            # 获取所有有character_messages数据的session
+            cursor.execute("SELECT session_id, character_messages FROM sessions WHERE character_messages IS NOT NULL")
+            sessions_to_migrate = cursor.fetchall()
+            
+            for session_row in sessions_to_migrate:
+                try:
+                    import json
+                    old_messages = json.loads(session_row['character_messages'])
+                    # 如果是旧格式的数组，转换为新格式
+                    if isinstance(old_messages, list):
+                        # 旧格式是简单的字符串数组，转换为消息格式
+                        user_view = [{"role": "assistant", "content": msg} for msg in old_messages]
+                        assistant_view = [{"role": "assistant", "content": msg} for msg in old_messages]
+                        
+                        cursor.execute("""
+                            UPDATE sessions
+                            SET character_messages_user_view = ?, character_messages_assistant_view = ?
+                            WHERE session_id = ?
+                        """, (json.dumps(user_view, ensure_ascii=False),
+                              json.dumps(assistant_view, ensure_ascii=False),
+                              session_row['session_id']))
+                except Exception as e:
+                    print(f"迁移session {session_row['session_id']} 的character_messages失败: {e}")
+            
+            # 删除旧字段（注意：SQLite不支持DROP COLUMN，需要重建表，这里先保留兼容性）
+            print("数据迁移完成，旧的character_messages字段保留用于兼容性")
+
+        # 4. 投票历史表 (voting_history)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS voting_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -182,7 +274,7 @@ def initialize_storage():
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_voting_history_timestamp_desc ON voting_history (timestamp DESC);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_voting_history_user_hash ON voting_history (user_hash);")
 
-        # 4. 待处理比赛表 (pending_matches) - 用于周期性评分更新
+        # 5. 待处理比赛表 (pending_matches) - 用于周期性评分更新
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS pending_matches (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -276,21 +368,20 @@ def sync_models_with_db(conn: Optional[sqlite3.Connection] = None):
 def save_battle_record(battle_id: str, record: Dict):
     """保存新的对战记录"""
     with db_access() as conn:
-        conn.execute("""
-            INSERT INTO battles (
-                battle_id, battle_type, prompt_id, prompt_theme, prompt,
-                model_a_id, model_b_id, model_a_name, model_b_name,
-                response_a, response_b, status, winner, timestamp, created_at, discord_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            record["battle_id"], record.get("battle_type"), 
-            record.get("prompt_id"), record.get("prompt_theme"), record.get("prompt"),
-            record.get("model_a_id"), record.get("model_b_id"),
-            record.get("model_a_name"), record.get("model_b_name"),
-            record.get("response_a"), record.get("response_b"),
-            record["status"], record.get("winner"), record["timestamp"],
-            record["created_at"], record.get("discord_id")
-        ))
+        # 使用动态构建的方式，只插入 record 中存在的字段
+        columns = [key for key in record.keys() if key != 'battle_id']
+        # battle_id 总是第一个
+        all_columns = ['battle_id'] + columns
+        
+        placeholders = ', '.join(['?'] * len(all_columns))
+        column_names = ', '.join(all_columns)
+        
+        values = [battle_id] + [record[key] for key in columns]
+
+        conn.execute(f"""
+            INSERT INTO battles ({column_names})
+            VALUES ({placeholders})
+        """, tuple(values))
 
 def get_battle_record(battle_id: str) -> Dict | None:
     """获取指定的对战记录"""
@@ -382,6 +473,16 @@ def get_latest_battle_by_discord_id(discord_id: str) -> Optional[Dict]:
         cursor = conn.execute(
             "SELECT * FROM battles WHERE discord_id = ? ORDER BY created_at DESC LIMIT 1",
             (discord_id,)
+        )
+        record = cursor.fetchone()
+        return dict(record) if record else None
+
+def get_latest_battle_by_session_id(session_id: str) -> Optional[Dict]:
+    """获取指定会话最新的一条对战记录"""
+    with db_access() as conn:
+        cursor = conn.execute(
+            "SELECT * FROM battles WHERE session_id = ? ORDER BY created_at DESC LIMIT 1",
+            (session_id,)
         )
         record = cursor.fetchone()
         return dict(record) if record else None
@@ -519,3 +620,20 @@ def get_completed_battles_count() -> int:
         cursor = conn.execute("SELECT COUNT(*) FROM battles WHERE status = 'completed'")
         count = cursor.fetchone()[0]
         return count if count is not None else 0
+
+def get_latest_session_info_by_discord_id(discord_id: str) -> Optional[Dict[str, Any]]:
+    """
+    通过 discord_id 获取用户最新的会话信息 (session_id 和 turn_count)。
+    """
+    with db_access() as conn:
+        cursor = conn.execute(
+            "SELECT session_id, turn_count FROM sessions WHERE discord_id = ? ORDER BY updated_at DESC LIMIT 1",
+            (discord_id,)
+        )
+        record = cursor.fetchone()
+        return dict(record) if record else None
+
+def increment_session_turn_count(session_id: str):
+    """将指定会话的 turn_count 原子性地加一"""
+    with db_access() as conn:
+        conn.execute("UPDATE sessions SET turn_count = turn_count + 1 WHERE session_id = ?", (session_id,))

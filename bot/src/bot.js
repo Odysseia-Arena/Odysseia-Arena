@@ -55,6 +55,11 @@ function allowedUserRoleMentions() {
 // 用于存储进行中的对战信息
 const activeBattles = new Map();
 
+// 用于存储用户会话信息
+const userSessions = new Map();
+// 用于存储会话ID与用户ID的映射
+const sessionToUser = new Map();
+
  // --- 新增：格式化模型名称，添加专属Emoji ---
 function formatModelName(modelName) {
   if (!modelName) return 'N/A';
@@ -233,145 +238,131 @@ async function handleCommand(interaction) {
       });
 
       const battleType = interaction.commandName === 'battle' ? 'high_tier' : 'low_tier';
+      let sessionId;
+      
+      // 尝试获取用户最新的会话ID
+      try {
+        const latestSessionResponse = await axios.post(`${API_URL}/sessions/latest`, {
+          discord_id: interaction.user.id
+        });
+        
+        if (latestSessionResponse.data && latestSessionResponse.data.session_id) {
+          // 如果有现有会话且轮次小于5，继续使用该会话
+          if (latestSessionResponse.data.turn_count < 5) {
+            sessionId = latestSessionResponse.data.session_id;
+            console.log(`[Session] 继续使用现有会话 ${sessionId}，当前轮次：${latestSessionResponse.data.turn_count}`);
+          } else {
+            // 轮次已达上限，创建新会话
+            sessionId = crypto.randomUUID();
+            console.log(`[Session] 现有会话已达到最大轮次，创建新会话 ${sessionId}`);
+          }
+        } else {
+          // 没有现有会话，创建新会话
+          sessionId = crypto.randomUUID();
+          console.log(`[Session] 未找到现有会话，创建新会话 ${sessionId}`);
+        }
+      } catch (error) {
+        // 获取会话失败，创建新会话
+        sessionId = crypto.randomUUID();
+        console.log(`[Session] 获取最新会话失败，创建新会话 ${sessionId}：`, error.message);
+      }
+      
+      // 初始化用户会话信息，记录对话轮次和会话状态
+      userSessions.set(interaction.user.id, {
+        sessionId: sessionId,
+        battleType: battleType,
+        conversationCount: 0,
+        maxConversations: 5, // 最多对话5次后必须重置
+        status: 'initializing', // 状态：initializing, character_selection, ongoing, completed
+        authorId: interaction.user.id,
+        characterMessages: [],
+        currentMessage: null,
+        messageHistory: [],
+        createdAt: new Date()
+      });
+      
+      // 同时记录会话ID到用户ID的映射，方便后续查找
+      sessionToUser.set(sessionId, interaction.user.id);
+
+      // 准备初始请求参数，input设为null以触发角色消息生成
       const payload = {
+        session_id: sessionId,
         battle_type: battleType,
         discord_id: interaction.user.id,
+        input: null  // 关键点：input为null，表示初次对战
       };
+      
       console.log(`[API] Sending POST request to ${API_URL}/battle with payload:`, JSON.stringify(payload, null, 2));
       const response = await axios.post(`${API_URL}/battle`, payload);
       const battle = response.data;
-      console.log(`[API] Successfully created battle ${battle.battle_id} for user ${interaction.user.id}`);
+      console.log(`[API] Successfully initiated session ${sessionId} for user ${interaction.user.id}`);
+      console.log('[API] Backend Response:', JSON.stringify(battle, null, 2));
       
-      // 存储完整对战信息用于后续交互
-      activeBattles.set(battle.battle_id, {
-        ...battle,
-        authorId: interaction.user.id,
-        createdAt: new Date(), // 增加创建时间戳
-      });
-
-      // 步骤2：准备私信内容
+      // 检查是否获取到了character_messages
+      if (!battle.character_messages || battle.character_messages.length === 0) {
+        await interaction.followUp({
+          content: `<@${interaction.user.id}> 未能获取到初始角色消息，请稍后重试。`,
+          flags: 'Ephemeral'
+        });
+        return;
+      }
+      
+      // 更新用户会话状态
+      const userSession = userSessions.get(interaction.user.id);
+      userSession.status = 'character_selection';
+      userSession.characterMessages = battle.character_messages;
+      userSessions.set(interaction.user.id, userSession);
+      
+      // 创建显示角色消息的Embed
       const embed = new EmbedBuilder()
         .setColor(0x0099FF)
-        .setTitle('⚔️ 新的对战！')
-        .addFields({ name: '对战 ID', value: `${battle.battle_id}` })
-        .setFooter({ text: `状态: 等待投票` });
+        .setTitle('⚔️ 选择初始场景')
+        .setDescription('请选择以下场景之一及其对应选项作为对话的开始：')
+        .setFooter({ text: `会话ID: ${sessionId} | 状态: 选择初始行动` });
 
-      // --- 使用 Description 字段智能展示 ---
-      const themeText = battle.prompt_theme ? `**主题：** ${battle.prompt_theme}\n\n` : '';
-      const quotedPrompt = battle.prompt.split('\n').map(line => `> ${line}`).join('\n');
-      const baseText = `${themeText}用户提示词：\n${quotedPrompt}\n\n`;
-      let templateA = `**模型 A 的回答**\n\`\`\`\n%content%\n\`\`\`\n`;
-      let templateB = `**模型 B 的回答**\n\`\`\`\n%content%\n\`\`\``;
+      const components = [];
       
-      const formattingLength = (baseText + templateA + templateB).replace(/%content%/g, '').length;
-      const availableLength = 4096 - formattingLength;
-      const minQuota = 1000; // 最小固定配额
-      
-      let responseA_display = battle.response_a;
-      let responseB_display = battle.response_b;
-      let truncated = false;
-      let is_A_truncated = false;
-      let is_B_truncated = false;
+      // 添加每个角色消息到Embed中，并创建对应的按钮
+      battle.character_messages.forEach((msg, characterIndex) => {
+        const sceneLabel = String.fromCharCode(65 + characterIndex); // A, B, C...
+        const optionsDescription = (msg.options && msg.options.length > 0)
+          ? msg.options.map((opt, i) => `> **${sceneLabel}${i + 1}:** ${opt}`).join('\n\n')
+          : '> 此场景没有预设选项。';
 
-      if ((responseA_display.length + responseB_display.length) > availableLength) {
-        truncated = true;
-        let remainingLength = availableLength;
-        
-        // 处理A的配额
-        if (responseA_display.length < minQuota) {
-          // A 小于最小配额，完整显示A
-          remainingLength -= responseA_display.length;
+        embed.addFields({
+          name: `场景 ${sceneLabel}`,
+          value: `${safeTruncateEmbed(msg.text)}\n\n${optionsDescription}`
+        });
+
+        if (msg.options && msg.options.length > 0) {
+          const row = new ActionRowBuilder();
+          msg.options.forEach((_, optionIndex) => {
+            const buttonLabel = `${sceneLabel}${optionIndex + 1}`;
+            row.addComponents(
+              new ButtonBuilder()
+                .setCustomId(`select_initial_option:${sessionId}:${characterIndex}:${optionIndex}`)
+                .setLabel(buttonLabel)
+                .setStyle(ButtonStyle.Primary)
+            );
+          });
+          components.push(row);
         } else {
-          // A 大于最小配额，尝试分配一半可用空间
-          const allocatedToA = Math.floor(availableLength / 2);
-          if (responseA_display.length > allocatedToA) {
-            const maxA_Length = allocatedToA > 3 ? allocatedToA - 3 : 0;
-            responseA_display = responseA_display.substring(0, maxA_Length) + '...';
-            is_A_truncated = true;
-          }
-          remainingLength -= responseA_display.length;
+            const row = new ActionRowBuilder();
+            row.addComponents(
+                new ButtonBuilder()
+                    .setCustomId(`select_character:${sessionId}:${characterIndex}`)
+                    .setLabel(`选择场景 ${sceneLabel} (查看后续选项)`)
+                    .setStyle(ButtonStyle.Secondary)
+            );
+            components.push(row);
         }
-
-        // 处理B的配额
-        if (responseB_display.length > remainingLength) {
-           // 确保为 '...' 留出空间
-           const maxB_Length = remainingLength > 3 ? remainingLength - 3 : 0;
-           responseB_display = responseB_display.substring(0, maxB_Length) + '...';
-           is_B_truncated = true;
-        }
-      }
-
-      if (is_A_truncated) templateA = `**模型 A 的回答 (部分)**\n\`\`\`\n%content%\n\`\`\`\n`;
-      if (is_B_truncated) templateB = `**模型 B 的回答 (部分)**\n\`\`\`\n%content%\n\`\`\``;
-
-      const finalDescription = baseText +
-                               templateA.replace('%content%', responseA_display) +
-                               templateB.replace('%content%', responseB_display);
-
-      let finalDescriptionText = finalDescription;
-      if (finalDescriptionText.length > 4096) {
-        finalDescriptionText = finalDescriptionText.substring(0, 4093) + '...';
-        // 检查末尾是否是未闭合的代码块
-        const codeBlockMatch = finalDescriptionText.match(/```/g);
-        if (codeBlockMatch && codeBlockMatch.length % 2 !== 0) {
-          // 如果是奇数个，说明有未闭合的，我们把它补上
-          finalDescriptionText = finalDescriptionText.substring(0, 4089) + '...\n```';
-        }
-      }
-      embed.setDescription(safeTruncateEmbed(finalDescriptionText));
-
-      if (truncated) {
-        let hint = '';
-        if (is_A_truncated && is_B_truncated) {
-          hint = '模型 A 和 模型 B 的回答都过长';
-        } else if (is_A_truncated) {
-          hint = '模型 A 的回答过长';
-        } else {
-          hint = '模型 B 的回答过长';
-        }
-        embed.addFields({ name: '提示', value: `${hint}，请点击下方按钮查看完整内容。` });
-      }
-
-      embed.addFields({ name: '❗ 注意', value: '创建的对战若30分钟内无人投票将被自动销毁。成功投票的对战可被永久保存，并通过ID随时查询，可通过下方按钮查看全文。' });
-
-      // 步骤3：准备按钮
-      const viewButtons = new ActionRowBuilder()
-        .addComponents(
-          new ButtonBuilder()
-            .setCustomId(`view_full:${battle.battle_id}:model_a`)
-            .setLabel('查看模型A全文')
-            .setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder()
-            .setCustomId(`view_full:${battle.battle_id}:model_b`)
-            .setLabel('查看模型B全文')
-            .setStyle(ButtonStyle.Secondary)
-        );
-
-      const voteButtons = new ActionRowBuilder()
-        .addComponents(
-          new ButtonBuilder()
-            .setCustomId(`vote:${battle.battle_id}:model_a`)
-            .setLabel('👍 投给模型 A')
-            .setStyle(ButtonStyle.Primary),
-          new ButtonBuilder()
-            .setCustomId(`vote:${battle.battle_id}:model_b`)
-            .setLabel('👍 投给模型 B')
-            .setStyle(ButtonStyle.Primary),
-          new ButtonBuilder()
-            .setCustomId(`vote:${battle.battle_id}:tie`)
-            .setLabel('🤝 平局')
-            .setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder()
-            .setCustomId(`vote:${battle.battle_id}:skip`)
-            .setLabel('弃权')
-            .setStyle(ButtonStyle.Secondary)
-        );
+      });
       
-      // 步骤4：使用 followUp 发送包含对战结果的新私信
+      // 发送包含角色选择的消息
       await interaction.followUp({
-        content: `<@${interaction.user.id}>`, // 在 content 中提及用户以触发通知
+        content: `<@${interaction.user.id}>`,
         embeds: [embed],
-        components: [viewButtons, voteButtons],
+        components: components,
         flags: 'Ephemeral'
       });
 
@@ -617,6 +608,7 @@ async function handleCommand(interaction) {
         } else if (data.winner) {
           winnerText = formatModelName(data.winner);
         }
+        
 
         embed.addFields(
           { name: '模型 A 名称', value: formatModelName(data.model_a), inline: true },
@@ -866,12 +858,266 @@ async function handleCommand(interaction) {
 
 async function handleButton(interaction) {
   if (interaction.customId.startsWith('leaderboard_')) return;
-  const [action, battleId, choice] = interaction.customId.split(':');
+  
+  const parts = interaction.customId.split(':');
+  const action = parts[0];
+
+  if (action === 'select_initial_option') {
+    const sessionId = parts[1];
+    const characterIndex = parts[2];
+    const optionIndex = parts[3];
+    await handleInitialOptionSelectionButton(interaction, sessionId, characterIndex, optionIndex);
+    return;
+  }
+
+  const sessionOrBattleId = parts[1];
+  const choice = parts[2];
 
   if (action === 'view_full') {
-    await handleViewFullButton(interaction, battleId, choice);
+    await handleViewFullButton(interaction, sessionOrBattleId, choice);
   } else if (action === 'vote') {
-    await handleVoteButton(interaction, battleId, choice);
+    await handleVoteButton(interaction, sessionOrBattleId, choice);
+  } else if (action === 'select_character') {
+    await handleCharacterSelectionButton(interaction, sessionOrBattleId, choice);
+  } else if (action === 'select_option') {
+    await handleOptionSelectionButton(interaction, sessionOrBattleId, choice);
+  } else if (action === 'reveal_models') {
+    await handleRevealModelsButton(interaction, sessionOrBattleId, choice);
+  // 移除不再需要的confirm_selection处理
+  } else if (action === 'continue_battle') {
+    await handleContinueBattleButton(interaction, sessionOrBattleId, choice);
+  }
+}
+
+// 处理角色选择按钮
+async function handleCharacterSelectionButton(interaction, sessionId, characterIndex) {
+  await interaction.deferUpdate();
+  
+  // 获取用户ID
+  const userId = sessionToUser.get(sessionId);
+  if (!userId || userId !== interaction.user.id) {
+    await interaction.followUp({
+      content: '只有发起会话的用户才能选择角色消息。',
+      flags: 'Ephemeral'
+    });
+    return;
+  }
+  
+  // 获取会话信息
+  const userSession = userSessions.get(userId);
+  if (!userSession || userSession.sessionId !== sessionId || userSession.status !== 'character_selection') {
+    await interaction.followUp({
+      content: '会话状态已改变，无法选择角色消息。',
+      flags: 'Ephemeral'
+    });
+    return;
+  }
+  
+  try {
+    // 获取选中的角色消息和选项
+    const selectedCharacterMessage = userSession.characterMessages[characterIndex];
+    
+    // 向API发送角色选择请求
+    const payload = {
+      session_id: sessionId,
+      character_messages_id: parseInt(characterIndex)
+    };
+    
+    console.log(`[API] Sending POST request to ${API_URL}/character_selection with payload:`, JSON.stringify(payload, null, 2));
+    const response = await axios.post(`${API_URL}/character_selection`, payload);
+    
+    // 更新会话状态
+    userSession.status = 'ongoing';
+    userSession.currentMessage = { text: selectedCharacterMessage.text };
+    userSession.messageHistory.push({ text: selectedCharacterMessage.text });
+    userSessions.set(userId, userSession);
+    
+    // 创建显示选项的Embed
+    const embed = new EmbedBuilder()
+      .setColor(0x0099FF)
+      .setTitle('⚔️ 你选择了以下场景')
+      .setDescription(safeTruncateEmbed(selectedCharacterMessage.text))
+      .setFooter({ text: `会话ID: ${sessionId} | 状态: 选择回复选项` });
+    
+    // 创建选项按钮
+    const optionButtons = new ActionRowBuilder();
+    
+    // 使用消息中已包含的选项
+    selectedCharacterMessage.options.forEach((option, index) => {
+      optionButtons.addComponents(
+        new ButtonBuilder()
+          .setCustomId(`select_option:${sessionId}:${index}`)
+          .setLabel(`选项 ${index + 1}`)
+          .setStyle(ButtonStyle.Primary)
+      );
+    });
+    
+    // 更新原消息
+    await interaction.editReply({
+      content: `<@${userId}> 请选择下面的选项继续:`,
+      embeds: [embed],
+      components: [optionButtons]
+    });
+    
+    // 添加选项描述
+    const optionsEmbed = new EmbedBuilder()
+      .setColor(0x0099FF)
+      .setTitle('可选的回复选项')
+      .setDescription('');
+    
+    // 为每个选项添加描述
+    selectedCharacterMessage.options.forEach((option, index) => {
+      optionsEmbed.addFields({
+        name: `选项 ${index + 1}`,
+        value: safeTruncateEmbed(option)
+      });
+    });
+    
+    // 发送选项描述
+    await interaction.followUp({
+      embeds: [optionsEmbed],
+      flags: 'Ephemeral'
+    });
+    
+  } catch (error) {
+    console.error('处理角色选择时出错:', error.response ? JSON.stringify(error.response.data, null, 2) : error.message);
+    await interaction.followUp({
+      content: `处理角色选择失败: ${error.response?.data?.detail || error.message}`,
+      flags: 'Ephemeral'
+    });
+  }
+}
+
+// 新增：处理初始场景和选项一步到位的按钮
+async function handleInitialOptionSelectionButton(interaction, sessionId, characterIndex, optionIndex) {
+  // 1. 获取用户会话和选择内容
+  const userId = sessionToUser.get(sessionId);
+  if (!userId || userId !== interaction.user.id) {
+    await interaction.reply({ content: '这不属于你的会话。', ephemeral: true });
+    return;
+  }
+  const userSession = userSessions.get(userId);
+  if (!userSession || userSession.sessionId !== sessionId || userSession.status !== 'character_selection') {
+    await interaction.reply({ content: '会话已过期或状态不正确。', ephemeral: true });
+    return;
+  }
+
+  const selectedScene = userSession.characterMessages[characterIndex];
+  const selectedOptionText = selectedScene.options[optionIndex];
+  const sceneLabel = String.fromCharCode(65 + parseInt(characterIndex));
+  const optionLabel = `${sceneLabel}${parseInt(optionIndex) + 1}`;
+
+  // 2. 立即修改原始消息，显示用户的选择并禁用按钮
+  const confirmationEmbed = new EmbedBuilder()
+    .setColor(0x57F287) // Green color for confirmation
+    .setTitle('✅ 初始场景已选择')
+    .setDescription(safeTruncateEmbed(selectedScene.text))
+    .addFields({ name: '你选择了', value: `> **${optionLabel}:** ${selectedOptionText}` })
+    .setFooter({ text: `会话ID: ${sessionId} | 状态: 已确认` });
+
+  await interaction.update({
+    embeds: [confirmationEmbed],
+    components: []
+  });
+
+  // 3. 发送一个新的"处理中"消息
+  const loadingMessage = await interaction.followUp({
+    content: `<@${userId}> 你的选择已确认，正在生成模型的回复...`,
+    ephemeral: true
+  });
+
+  try {
+    // 4. 在后台调用API
+    const characterSelectionPayload = {
+      session_id: sessionId,
+      character_messages_id: parseInt(characterIndex)
+    };
+    console.log(`[API] Sending POST to /character_selection:`, JSON.stringify(characterSelectionPayload, null, 2));
+    const charSelectionResponse = await axios.post(`${API_URL}/character_selection`, characterSelectionPayload);
+    console.log(`[API] Response from /character_selection:`, JSON.stringify(charSelectionResponse.data, null, 2));
+
+    userSession.status = 'ongoing';
+    userSession.messageHistory.push({ text: selectedScene.text });
+    userSession.messageHistory.push({ text: selectedOptionText });
+    userSessions.set(userId, userSession);
+
+    const battlePayload = {
+      session_id: sessionId,
+      battle_type: userSession.battleType,
+      discord_id: userId,
+      input: selectedOptionText
+    };
+    
+    console.log(`[API] Sending POST to /battle:`, JSON.stringify(battlePayload, null, 2));
+    const battleResponse = await axios.post(`${API_URL}/battle`, battlePayload);
+    const battleResult = battleResponse.data;
+    console.log(`[API] Response from /battle:`, JSON.stringify(battleResult, null, 2));
+
+    // 5. 更新"处理中"消息为最终结果
+    userSession.conversationCount += 1;
+    userSessions.set(userId, userSession);
+
+    const optionsAText = battleResult.response_a.options
+      ? '\n\n**选项:**\n' + battleResult.response_a.options.map((opt, i) => `> **A${i + 1}:** ${opt}`).join('\n')
+      : '';
+    const modelAEmbed = new EmbedBuilder()
+      .setColor(0x0099FF)
+      .setTitle('模型 A 的回复')
+      .setDescription(safeTruncateEmbed(battleResult.response_a.text + optionsAText))
+      .setFooter({ text: `会话ID: ${sessionId} | 对话轮次: ${userSession.conversationCount}/${userSession.maxConversations}` });
+
+    const optionsBText = battleResult.response_b.options
+      ? '\n\n**选项:**\n' + battleResult.response_b.options.map((opt, i) => `> **B${i + 1}:** ${opt}`).join('\n')
+      : '';
+    const modelBEmbed = new EmbedBuilder()
+      .setColor(0x00FF99)
+      .setTitle('模型 B 的回复')
+      .setDescription(safeTruncateEmbed(battleResult.response_b.text + optionsBText))
+      .setFooter({ text: `会话ID: ${sessionId} | 对话轮次: ${userSession.conversationCount}/${userSession.maxConversations}` });
+
+    const optionsARow = new ActionRowBuilder();
+    if (battleResult.response_a.options) {
+      battleResult.response_a.options.forEach((_, index) => {
+        optionsARow.addComponents(
+          new ButtonBuilder().setCustomId(`select_option:${sessionId}:A${index}`).setLabel(`A${index + 1}`).setStyle(ButtonStyle.Primary)
+        );
+      });
+    }
+
+    const optionsBRow = new ActionRowBuilder();
+    if (battleResult.response_b.options) {
+      battleResult.response_b.options.forEach((_, index) => {
+        optionsBRow.addComponents(
+          new ButtonBuilder().setCustomId(`select_option:${sessionId}:B${index}`).setLabel(`B${index + 1}`).setStyle(ButtonStyle.Success)
+        );
+      });
+    }
+
+    const viewModelsRow = new ActionRowBuilder()
+      .addComponents(
+        new ButtonBuilder().setCustomId(`reveal_models:${sessionId}:true`).setLabel('查看模型名称').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`continue_battle:${sessionId}:new`).setLabel('结束并开始新对话').setStyle(ButtonStyle.Secondary)
+      );
+
+    const finalComponents = [];
+    if (optionsARow.components.length > 0) finalComponents.push(optionsARow);
+    if (optionsBRow.components.length > 0) finalComponents.push(optionsBRow);
+    finalComponents.push(viewModelsRow);
+
+    await loadingMessage.edit({
+      content: `<@${userId}> 两个模型已生成回复，请选择下面的选项继续对话:`,
+      embeds: [modelAEmbed, modelBEmbed],
+      components: finalComponents,
+      ephemeral: true
+    });
+
+  } catch (error) {
+    console.error('处理初始选项选择时出错:', error.response ? JSON.stringify(error.response.data, null, 2) : error.message);
+    // 即使出错，也尝试用 followUp 发送错误信息，因为 loadingMessage 可能已失效
+    await interaction.followUp({
+      content: `处理初始选项失败: ${error.response?.data?.detail || error.message}`,
+      ephemeral: true
+    });
   }
 }
 
@@ -1048,6 +1294,432 @@ async function handleVoteButton(interaction, battleId, choice) {
       // 其他API错误，使用 followUp 发送临时消息，避免修改原始投票界面
       await interaction.followUp({ content: `<@${interaction.user.id}> 投票失败：${String(detail)}`, flags: 'Ephemeral' });
     }
+  }
+}
+
+// 处理选项选择按钮
+async function handleOptionSelectionButton(interaction, sessionId, optionIndex) {
+  await interaction.deferUpdate();
+  
+  // 获取用户ID
+  const userId = sessionToUser.get(sessionId);
+  if (!userId || userId !== interaction.user.id) {
+    await interaction.followUp({
+      content: '只有发起会话的用户才能选择回复选项。',
+      flags: 'Ephemeral'
+    });
+    return;
+  }
+  
+  // 获取会话信息
+  const userSession = userSessions.get(userId);
+  if (!userSession || userSession.sessionId !== sessionId || userSession.status !== 'ongoing') {
+    await interaction.followUp({
+      content: '会话状态已改变，无法选择回复选项。',
+      flags: 'Ephemeral'
+    });
+    return;
+  }
+  
+  try {
+    // 获取选择的选项内容
+    let selectedOption = '';
+    const modelType = optionIndex.toString().startsWith('A') || optionIndex.toString().startsWith('B')
+      ? optionIndex.toString().charAt(0)
+      : null;
+      
+    if (modelType) {
+      // 对话进行中，选择A或B模型的选项
+      const optionIdx = parseInt(optionIndex.substring(1));
+      const optionsEmbed = interaction.message.embeds.length > 2
+        ? interaction.message.embeds[modelType === 'A' ? 2 : 3]
+        : await interaction.fetchReply().then(msg =>
+            msg.embeds.find(e => e.title?.includes(modelType === 'A' ? '模型 A 的回复选项' : '模型 B 的回复选项'))
+          );
+      
+      if (optionsEmbed && optionsEmbed.fields && optionsEmbed.fields.length > optionIdx) {
+        selectedOption = optionsEmbed.fields[optionIdx].value;
+      }
+    } else {
+      // 初始选择，获取角色消息的选项
+      const characterMessage = userSession.characterMessages[parseInt(optionIndex)];
+      selectedOption = characterMessage.options[0]; // 直接使用第一个选项
+    }
+    
+    if (!selectedOption) {
+      console.error('无法获取选项内容');
+      await interaction.followUp({
+        content: '无法获取选项内容，请尝试重新选择。',
+        flags: 'Ephemeral'
+      });
+      return;
+    }
+    
+    // 向API发送battle请求，继续对话
+    const payload = {
+      session_id: sessionId,
+      battle_type: userSession.battleType,
+      discord_id: userId,
+      input: selectedOption
+    };
+    
+    console.log(`[API] Sending POST request to ${API_URL}/battle with payload:`, JSON.stringify(payload, null, 2));
+    await interaction.editReply({
+      content: `<@${userId}> 正在处理你的选择...`,
+      embeds: [],
+      components: []
+    });
+    
+    const response = await axios.post(`${API_URL}/battle`, payload);
+    const battle = response.data;
+    console.log(`[API] Response from /battle:`, JSON.stringify(battle, null, 2));
+    
+    // 更新会话状态和对话轮次
+    userSession.conversationCount += 1;
+    userSession.messageHistory.push({ text: selectedOption });
+    userSessions.set(userId, userSession);
+    
+    // 检查是否需要投票
+    if (modelType) {
+      // 如果是选择了特定模型的选项，发送投票
+      const voteChoice = modelType === 'A' ? 'model_a' : 'model_b';
+      try {
+        // 获取当前battleId
+        const battleId = battle.battle_id;
+        
+        // 发送投票
+        await axios.post(`${API_URL}/vote/${battleId}`, {
+          vote_choice: voteChoice,
+          discord_id: userId
+        });
+        
+        console.log(`[API] 为模型 ${voteChoice} 投票成功`);
+      } catch (voteError) {
+        console.error('投票失败:', voteError.message);
+      }
+    }
+    
+    // 创建显示模型回复的Embed
+    const modelAEmbed = new EmbedBuilder()
+      .setColor(0x0099FF)
+      .setTitle('模型 A 的回复')
+      .setDescription(safeTruncateEmbed(battle.response_a.text))
+      .setFooter({ text: `会话ID: ${sessionId} | 对话轮次: ${userSession.conversationCount}/${userSession.maxConversations}` });
+    
+    const modelBEmbed = new EmbedBuilder()
+      .setColor(0x00FF99)
+      .setTitle('模型 B 的回复')
+      .setDescription(safeTruncateEmbed(battle.response_b.text))
+      .setFooter({ text: `会话ID: ${sessionId} | 对话轮次: ${userSession.conversationCount}/${userSession.maxConversations}` });
+    
+    // 创建选项按钮 - 模型A的选项
+    const optionsARow = new ActionRowBuilder();
+    battle.response_a.options.forEach((option, index) => {
+      optionsARow.addComponents(
+        new ButtonBuilder()
+          .setCustomId(`select_option:${sessionId}:A${index}`)
+          .setLabel(`A${index + 1}`)
+          .setStyle(ButtonStyle.Primary)
+      );
+    });
+    
+    // 创建选项按钮 - 模型B的选项
+    const optionsBRow = new ActionRowBuilder();
+    battle.response_b.options.forEach((option, index) => {
+      optionsBRow.addComponents(
+        new ButtonBuilder()
+          .setCustomId(`select_option:${sessionId}:B${index}`)
+          .setLabel(`B${index + 1}`)
+          .setStyle(ButtonStyle.Success)
+      );
+    });
+    
+    // 添加查看模型名称按钮
+    const viewModelsRow = new ActionRowBuilder()
+      .addComponents(
+        new ButtonBuilder()
+          .setCustomId(`reveal_models:${sessionId}:true`)
+          .setLabel('查看模型名称')
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId(`reveal_models:${sessionId}:false`)
+          .setLabel('不查看，继续对话')
+          .setStyle(ButtonStyle.Secondary)
+      );
+    
+    // 发送模型回复和选项
+    await interaction.editReply({
+      content: `<@${userId}> 两个模型已生成回复，请选择下一步操作:`,
+      embeds: [modelAEmbed, modelBEmbed],
+      components: [optionsARow, optionsBRow, viewModelsRow]
+    });
+    
+    // 添加选项描述
+    const optionsAEmbed = new EmbedBuilder()
+      .setColor(0x0099FF)
+      .setTitle('模型 A 的回复选项')
+      .setDescription('');
+    
+    battle.response_a.options.forEach((option, index) => {
+      optionsAEmbed.addFields({
+        name: `A${index + 1}`,
+        value: safeTruncateEmbed(option)
+      });
+    });
+    
+    const optionsBEmbed = new EmbedBuilder()
+      .setColor(0x00FF99)
+      .setTitle('模型 B 的回复选项')
+      .setDescription('');
+    
+    battle.response_b.options.forEach((option, index) => {
+      optionsBEmbed.addFields({
+        name: `B${index + 1}`,
+        value: safeTruncateEmbed(option)
+      });
+    });
+    
+    // 发送选项描述
+    await interaction.followUp({
+      embeds: [optionsAEmbed, optionsBEmbed],
+      flags: 'Ephemeral'
+    });
+  } catch (error) {
+    console.error('处理选项选择时出错:', error.response ? JSON.stringify(error.response.data, null, 2) : error.message);
+    await interaction.followUp({
+      content: `处理选项选择失败: ${error.response?.data?.detail || error.message}`,
+      flags: 'Ephemeral'
+    });
+  }
+}
+
+// 处理查看模型名称按钮
+async function handleRevealModelsButton(interaction, sessionId, choice) {
+  await interaction.deferUpdate();
+  
+  // 获取用户ID
+  const userId = sessionToUser.get(sessionId);
+  if (!userId || userId !== interaction.user.id) {
+    await interaction.followUp({
+      content: '只有发起会话的用户才能查看模型名称。',
+      flags: 'Ephemeral'
+    });
+    return;
+  }
+  
+  // 获取会话信息
+  const userSession = userSessions.get(userId);
+  if (!userSession || userSession.sessionId !== sessionId || userSession.status !== 'ongoing') {
+    await interaction.followUp({
+      content: '会话状态已改变，无法执行此操作。',
+      flags: 'Ephemeral'
+    });
+    return;
+  }
+  
+  try {
+    // 检查是否需要查看模型名称
+    const revealModels = choice === 'true';
+    
+    // 如果是查看模型名称，则调用API
+    if (revealModels) {
+      // 获取当前battleId，这里假设可以从用户会话中获取
+      const battleId = interaction.message.components[0].components[0].customId.split(':')[1];
+      
+      // 调用揭示模型API
+      console.log(`[API] Sending POST request to ${API_URL}/reveal/${battleId}`);
+      const response = await axios.post(`${API_URL}/reveal/${battleId}`);
+      
+      // 创建显示模型名称的Embed
+      const modelsEmbed = new EmbedBuilder()
+        .setColor(0xFFD700)
+        .setTitle('🔍 模型名称揭晓')
+        .setDescription('以下是参与本次对话的模型信息：')
+        .addFields(
+          { name: '模型 A', value: formatModelName(response.data.model_a_name), inline: true },
+          { name: '模型 B', value: formatModelName(response.data.model_b_name), inline: true }
+        )
+        .setFooter({ text: `会话ID: ${sessionId} | 下次对话将重新分配模型` });
+      
+      // 更新会话状态，标记为已查看模型
+      userSession.revealed = true;
+      userSessions.set(userId, userSession);
+      
+      // 发送模型信息
+      await interaction.editReply({
+        content: `<@${userId}> 模型名称已揭晓：`,
+        embeds: [modelsEmbed],
+        components: []
+      });
+      
+      // 添加继续对话按钮
+      const continueButton = new ActionRowBuilder()
+        .addComponents(
+          new ButtonBuilder()
+            .setCustomId(`continue_battle:${sessionId}:new`)
+            .setLabel('开始新的对话')
+            .setStyle(ButtonStyle.Primary)
+        );
+      
+      await interaction.followUp({
+        content: '请点击下方按钮继续对话：',
+        components: [continueButton],
+        flags: 'Ephemeral'
+      });
+    } else {
+      // 如果不查看模型名称，检查是否达到最大对话轮次
+      if (userSession.conversationCount >= userSession.maxConversations) {
+        // 强制查看模型名称并重置会话
+        await interaction.editReply({
+          content: `<@${userId}> 已达到最大对话轮次(${userSession.maxConversations}次)，必须查看模型名称后才能继续。`,
+          embeds: [],
+          components: []
+        });
+        
+        // 再次调用handleRevealModelsButton，但强制查看模型名称
+        await handleRevealModelsButton(interaction, sessionId, 'true');
+      } else {
+        // 如果未达到最大轮次，可以继续对话
+        await interaction.editReply({
+          content: `<@${userId}> 你选择继续对话而不查看模型名称。请从上方选择一个选项继续。`,
+          components: interaction.message.components.slice(0, 2) // 只保留选项按钮，移除查看模型名称按钮
+        });
+      }
+    }
+  } catch (error) {
+    console.error('处理查看模型名称时出错:', error.response ? JSON.stringify(error.response.data, null, 2) : error.message);
+    await interaction.followUp({
+      content: `处理查看模型名称失败: ${error.response?.data?.detail || error.message}`,
+      flags: 'Ephemeral'
+    });
+  }
+}
+
+// 处理继续对话按钮
+async function handleContinueBattleButton(interaction, sessionId, choice) {
+  await interaction.deferUpdate();
+  
+  // 获取用户ID
+  const userId = sessionToUser.get(sessionId);
+  if (!userId || userId !== interaction.user.id) {
+    await interaction.followUp({
+      content: '只有发起会话的用户才能继续对话。',
+      flags: 'Ephemeral'
+    });
+    return;
+  }
+  
+  // 获取会话信息
+  const userSession = userSessions.get(userId);
+  if (!userSession || userSession.sessionId !== sessionId) {
+    await interaction.followUp({
+      content: '会话状态已改变，无法继续对话。',
+      flags: 'Ephemeral'
+    });
+    return;
+  }
+  
+  try {
+    // 如果达到最大对话轮次或已查看模型名称，需要创建新会话
+    if (userSession.conversationCount >= userSession.maxConversations || userSession.revealed) {
+      // 生成新的会话ID
+      const newSessionId = crypto.randomUUID();
+      
+      // 重置用户会话信息
+      userSessions.set(userId, {
+        sessionId: newSessionId,
+        battleType: userSession.battleType,
+        conversationCount: 0,
+        maxConversations: 5,
+        status: 'initializing',
+        authorId: userId,
+        characterMessages: [],
+        currentMessage: null,
+        messageHistory: [],
+        createdAt: new Date()
+      });
+      
+      // 更新会话ID到用户ID的映射
+      sessionToUser.set(newSessionId, userId);
+      
+      // 准备初始请求参数
+      const payload = {
+        session_id: newSessionId,
+        battle_type: userSession.battleType,
+        discord_id: userId,
+        input: null
+      };
+      
+      console.log(`[API] Sending POST request to ${API_URL}/battle with payload:`, JSON.stringify(payload, null, 2));
+      await interaction.editReply({
+        content: `<@${userId}> 正在创建新的对话会话...`,
+        embeds: [],
+        components: []
+      });
+      
+      const response = await axios.post(`${API_URL}/battle`, payload);
+      const battle = response.data;
+      
+      // 检查是否获取到了character_messages
+      if (!battle.character_messages || battle.character_messages.length === 0) {
+        await interaction.followUp({
+          content: `<@${userId}> 未能获取到初始角色消息，请稍后重试。`,
+          flags: 'Ephemeral'
+        });
+        return;
+      }
+      
+      // 更新用户会话状态
+      const newUserSession = userSessions.get(userId);
+      newUserSession.status = 'character_selection';
+      newUserSession.characterMessages = battle.character_messages;
+      userSessions.set(userId, newUserSession);
+      
+      // 创建显示角色消息的Embed
+      const embed = new EmbedBuilder()
+        .setColor(0x0099FF)
+        .setTitle('⚔️ 选择初始场景')
+        .setDescription('请选择以下场景之一作为对话的开始：')
+        .setFooter({ text: `会话ID: ${newSessionId} | 状态: 选择角色消息` });
+      
+      // 添加每个角色消息到Embed中
+      battle.character_messages.forEach((msg, index) => {
+        embed.addFields({
+          name: `场景 ${index + 1}`,
+          value: safeTruncateEmbed(msg.text)
+        });
+      });
+      
+      // 创建角色选择按钮
+      const characterButtons = new ActionRowBuilder()
+        .addComponents(
+          battle.character_messages.map((_, index) =>
+            new ButtonBuilder()
+              .setCustomId(`select_character:${newSessionId}:${index}`)
+              .setLabel(`选择场景 ${index + 1}`)
+              .setStyle(ButtonStyle.Primary)
+          )
+        );
+      
+      // 发送包含角色选择的消息
+      await interaction.editReply({
+        content: `<@${userId}> 新的对话会话已创建：`,
+        embeds: [embed],
+        components: [characterButtons]
+      });
+    } else {
+      // 如果没有达到最大对话轮次且未查看模型名称，继续当前会话
+      await interaction.editReply({
+        content: `<@${userId}> 你可以继续当前对话。请从上方选择一个选项继续。`,
+        components: interaction.message.components.slice(0, 2) // 只保留选项按钮
+      });
+    }
+  } catch (error) {
+    console.error('处理继续对话时出错:', error.response ? JSON.stringify(error.response.data, null, 2) : error.message);
+    await interaction.followUp({
+      content: `处理继续对话失败: ${error.response?.data?.detail || error.message}`,
+      flags: 'Ephemeral'
+    });
   }
 }
 

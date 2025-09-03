@@ -9,9 +9,12 @@ from src.utils.logger_config import logger
 load_dotenv() # 加载 .env 文件
 
 # --- 核心路径定义 ---
-CONFIG_DIR = "config"
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+SRC_DIR = os.path.join(BASE_DIR, "src")
+CONFIG_DIR = os.path.join(BASE_DIR, "config")
 MODELS_FILE = os.path.join(CONFIG_DIR, "models.json")
 PRESET_MODELS_FILE = os.path.join(CONFIG_DIR, "preset_models.json") # 预制模型配置文件
+MODEL_PRESET_MAPPING_FILE = os.path.join(CONFIG_DIR, "model_preset_mapping.json") # 模型可用预设映射
 FIXED_PROMPTS_FILE = os.path.join(CONFIG_DIR, "fixed_prompts.json")
 MODEL_SCORES_FILE = os.path.join(CONFIG_DIR, "model_scores.json") # 新增文件路径
 PRESET_ANSWERS_DIR = os.path.join(CONFIG_DIR, "preset_answers") # 预制回答文件夹
@@ -45,6 +48,11 @@ MAX_CONCURRENT_BATTLES = int(os.getenv("MAX_CONCURRENT_BATTLES", 1))
 # --- 对战清理配置 ---
 # API 请求和对战生成超时时间（秒）
 GENERATION_TIMEOUT = int(os.getenv("GENERATION_TIMEOUT_SECONDS", 12 * 60))
+
+# --- 回答选项生成器配置 ---
+OPTION_LLM_API_URL = os.getenv("OPTION_LLM_API_URL", "http://127.0.0.1:5000/v1/chat/completions")
+OPTION_LLM_API_KEY = os.getenv("OPTION_LLM_API_KEY", "your_api_key_here")
+OPTION_LLM_MODEL = os.getenv("OPTION_LLM_MODEL", "your_model_id_here")
 
 # --- 等级与升降级系统配置 ---
 PROMOTION_RELEGATION_COUNT = 3      # 每日升降级模型的数量
@@ -211,6 +219,21 @@ def _load_preset_models_from_file(file_path: str) -> List[Dict]:
         logger.error(f"读取预制模型文件 {file_path} 时发生未知错误: {e}")
         return []
 
+def _load_json_file(file_path: str) -> Dict:
+    """通用JSON文件加载器"""
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        logger.warning(f"警告: 找不到配置文件 {file_path}。")
+        return {}
+    except json.JSONDecodeError:
+        logger.error(f"错误: 无法解析JSON文件 {file_path}")
+        return {}
+    except Exception as e:
+        logger.error(f"读取JSON文件 {file_path} 时发生未知错误: {e}")
+        return {}
+
 def _load_preset_answers_from_dir(dir_path: str) -> Dict[str, Dict]:
     """从目录加载所有预制回答JSON文件"""
     preset_answers = {}
@@ -244,6 +267,7 @@ _preset_models_config = HotReloadConfig(PRESET_MODELS_FILE, _load_preset_models_
 _prompts_config = HotReloadConfig(FIXED_PROMPTS_FILE, _load_prompts_from_file)
 _initial_scores_config = HotReloadConfig(MODEL_SCORES_FILE, _load_initial_scores_from_file)
 _preset_answers_config = HotReloadConfig(PRESET_ANSWERS_DIR, _load_preset_answers_from_dir)
+_model_preset_mapping_config = HotReloadConfig(MODEL_PRESET_MAPPING_FILE, _load_json_file)
 
 def get_initial_scores() -> Dict:
     """获取初始模型评分（支持热更新）"""
@@ -269,6 +293,10 @@ def get_preset_answers() -> Dict[str, Dict]:
 def get_preset_models() -> List[Dict]:
     """获取所有预制模型配置（支持热更新）"""
     return _preset_models_config.get_data()
+
+def get_model_preset_mapping() -> Dict[str, List[str]]:
+    """获取模型到其可用预设列表的映射（支持热更新）"""
+    return _model_preset_mapping_config.get_data()
 
 
 # --- 配置验证函数 ---

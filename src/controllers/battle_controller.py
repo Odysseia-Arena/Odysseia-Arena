@@ -2,6 +2,7 @@
 import random
 import uuid
 import time
+import json
 import asyncio
 from typing import Dict, Tuple, List, Optional
 from src.utils import config
@@ -205,13 +206,18 @@ def select_models_for_battle(tier: str, prompt_id: str, exclude_ids: List[str] =
         raise ValueError("合并后的备用池模型总数少于两个，无法开始对战。")
     return tuple(random.sample(combined_pool, 2))
 
-async def create_battle(battle_type: str, custom_prompt: str = None, discord_id: str = None) -> Optional[Dict]:
+async def create_battle(battle_type: str, custom_prompt: str = None, discord_id: str = None, 
+                       session_id: str = None, input_text: str = None, 
+                       silly_tavern_response: dict = None) -> Optional[Dict]:
     """
     创建一场新的对战。如果对战在生成期间被取消，则返回 None。
 
     :param battle_type: 对战类型 ("high_tier" 或 "low_tier")
     :param custom_prompt: 自定义提示词 (当前版本未使用)
     :param discord_id: 用户的 Discord ID (可选)
+    :param session_id: 会话ID (可选)
+    :param input_text: 用户输入文本 (可选)
+    :param silly_tavern_response: SillyTavernOdysseia API的响应 (可选)
     :return: 匿名化的对战详情
     """
     # 0. 速率限制检查
@@ -257,7 +263,9 @@ async def create_battle(battle_type: str, custom_prompt: str = None, discord_id:
                     "status": "pending_generation",
                     "timestamp": time.time(),
                     "created_at": time.time(),
-                    "discord_id": discord_id
+                    "discord_id": discord_id,
+                    "session_id": session_id,
+                    "input": input_text
                 }
                 storage.save_battle_record(battle_id, placeholder_record)
             else:
@@ -341,7 +349,7 @@ async def create_battle(battle_type: str, custom_prompt: str = None, discord_id:
             }
             storage.update_battle_record(battle_id, full_record_updates)
 
-            # 7. 返回匿名化响应
+            # 7. 返回匿名化响应 (不再包含模型名称)
             return {
                 "battle_id": battle_id,
                 "prompt": prompt_content,
@@ -398,3 +406,190 @@ def unstuck_battle(discord_id: str) -> int:
     # 注意：不在这里处理排行榜回滚，因为这些未完成的对战从未影响过排行榜分数。
     
     return deleted_count
+
+
+def get_model_by_id(model_id: str) -> Optional[Dict]:
+    """根据模型ID从配置中获取完整的模型对象"""
+    return next((m for m in config.get_models() if m['id'] == model_id), None)
+
+async def continue_battle_with_selection(session_id: str, user_input: str, battle_type: str, discord_id: Optional[str] = None) -> Dict:
+    """
+    处理用户选择后的对战流程，并返回两个模型的最终回复。
+    新增逻辑：根据上一轮对战的揭示状态，决定是复用模型还是重新选择。
+    """
+    from src.services.session_manager import SessionManager, SillyTavernOdysseiaClient
+    session_manager = SessionManager()
+    silly_tavern_client = SillyTavernOdysseiaClient()
+
+    # 1. 获取会话以获得模型和配置ID
+    session = session_manager.get_or_create_session(session_id, discord_id=discord_id, battle_type=battle_type)
+    if not session or not session.model_a_id or not session.model_b_id or not session.config_id_a or not session.config_id_b:
+        raise Exception(f"无法为会话 {session_id} 获取模型和配置信息。")
+
+    # 2. 决定本轮对战使用的模型
+    latest_battle = storage.get_latest_battle_by_session_id(session_id)
+    
+    model_a, model_b = None, None
+    if latest_battle and not latest_battle.get('revealed', False) and latest_battle.get('model_a_id') and latest_battle.get('model_b_id'):
+        # 复用上一轮的模型
+        logger.info(f"会话 {session_id} 的上一场对战未揭示，复用模型。")
+        model_a = get_model_by_id(latest_battle['model_a_id'])
+        model_b = get_model_by_id(latest_battle['model_b_id'])
+    else:
+        # 否则，使用当前会话中保存的模型
+        logger.info(f"会话 {session_id} 使用其初始分配的模型。")
+        model_a = get_model_by_id(session.model_a_id)
+        model_b = get_model_by_id(session.model_b_id)
+
+    if not model_a or not model_b:
+        raise Exception(f"无法为会话 {session_id} 加载有效的模型对象。")
+
+    # 3. 更新上下文并获取用于API调用的 assistant context
+    updated_contexts = session_manager.append_user_message(session_id, user_input, discord_id=discord_id)
+    try:
+        assistant_context = json.loads(updated_contexts["assistant"])
+    except (json.JSONDecodeError, KeyError):
+        raise ValueError("无法解析或获取 assistant 上下文。")
+
+    # 4. 并行调用 SillyTavern API 获取两个模型的干净提示
+    async def get_clean_prompt(config_id):
+        return silly_tavern_client.call_api(session_id, config_id, assistant_context)
+
+    st_response_a, st_response_b = await asyncio.gather(
+        get_clean_prompt(session.config_id_a),
+        get_clean_prompt(session.config_id_b)
+    )
+
+    if "error" in st_response_a:
+        raise Exception(f"为模型A调用SillyTavern失败: {st_response_a.get('error')}")
+    if "error" in st_response_b:
+        raise Exception(f"为模型B调用SillyTavern失败: {st_response_b.get('error')}")
+    
+    prompt_for_llm_a = st_response_a.get("clean_prompt", {}).get("assistant_view")
+    prompt_for_llm_b = st_response_b.get("clean_prompt", {}).get("assistant_view")
+
+    if not prompt_for_llm_a or not prompt_for_llm_b:
+        raise Exception("未能从SillyTavern获取两个模型所需的提示。")
+
+    # 5. 并行调用两个外部AI模型
+    response_a_raw, response_b_raw = await asyncio.gather(
+        model_client.call_model(model_a, prompt_for_llm_a),
+        model_client.call_model(model_b, prompt_for_llm_b),
+        return_exceptions=True
+    )
+    
+    # 检查模型调用是否出错
+    if isinstance(response_a_raw, Exception): raise response_a_raw
+    if isinstance(response_b_raw, Exception): raise response_b_raw
+
+    # 6. 并行处理两个模型的回复
+    async def _process_single_response(raw_response: str, config_id: str) -> Dict[str, str]:
+        """使用SillyTavern处理单个原始回复"""
+        assistant_payload = {"role": "assistant", "content": raw_response}
+        st_response = silly_tavern_client.call_api(
+            session_id,
+            config_id=config_id,
+            input_data=assistant_context, # 使用追加了用户输入的上下文
+            assistant_response=assistant_payload
+        )
+        if "error" in st_response:
+            logger.error(f"处理助手响应时SillyTavern调用失败: {st_response.get('error')}")
+            return {"user_view": {"role": "assistant", "content": raw_response},
+                    "assistant_view": {"role": "assistant", "content": raw_response}}
+
+        final_user_view = st_response.get("clean_prompt", {}).get("user_view", [])
+        final_assistant_view = st_response.get("clean_prompt", {}).get("assistant_view", [])
+
+        return {
+            "user_view": final_user_view[-1] if final_user_view else {"role": "assistant", "content": raw_response},
+            "assistant_view": final_assistant_view[-1] if final_assistant_view else {"role": "assistant", "content": raw_response}
+        }
+
+    processed_a, processed_b = await asyncio.gather(
+        _process_single_response(response_a_raw, session.config_id_a),
+        _process_single_response(response_b_raw, session.config_id_b)
+    )
+
+    # 7. 更新会话上下文
+    session_manager.append_assistant_responses(session_id, processed_a, processed_b, discord_id=discord_id)
+
+    # 8. 增加会话轮次计数
+    storage.increment_session_turn_count(session_id)
+
+    # 9. 构建完整的对战记录 (用于存储)
+    battle_id = str(uuid.uuid4())
+    full_battle_record_to_save = {
+        "battle_id": battle_id,
+        "battle_type": battle_type,
+        "prompt": json.dumps(assistant_context, ensure_ascii=False), # 使用通用的assistant_context作为prompt记录
+        "model_a_id": model_a['id'],
+        "model_b_id": model_b['id'],
+        "model_a_name": model_a['name'],
+        "model_b_name": model_b['name'],
+        "response_a": processed_a["user_view"]["content"],
+        "response_b": processed_b["user_view"]["content"],
+        "status": "pending_vote",
+        "session_id": session_id,
+        "input": user_input,
+        "revealed": False,
+        "timestamp": time.time(),
+        "created_at": time.time()
+    }
+    storage.save_battle_record(battle_id, full_battle_record_to_save)
+    
+    # 10. 为每个模型的回复并行生成选项
+    from src.services.response_generator import response_option_generator
+
+    async def generate_options_task(processed_response, config_id):
+        # 为选项生成构建临时上下文
+        temp_history = assistant_context + [processed_response["assistant_view"]]
+        return await response_option_generator.generate_options_for_response(
+            session_id, config_id, temp_history
+        )
+
+    options_a, options_b = await asyncio.gather(
+        generate_options_task(processed_a, session.config_id_a),
+        generate_options_task(processed_b, session.config_id_b)
+    )
+
+    # 11. 构建返回给前端的响应 (包含文本和选项)
+    response_to_frontend = {
+        "battle_id": battle_id,
+        "response_a": {
+            "text": full_battle_record_to_save["response_a"],
+            "options": options_a
+        },
+        "response_b": {
+            "text": full_battle_record_to_save["response_b"],
+            "options": options_b
+        },
+        "status": "pending_vote",
+        "session_id": session_id,
+        "config": { # 返回一个组合的config对象用于前端展示
+            "config_id_a": session.config_id_a,
+            "config_id_b": session.config_id_b
+        }
+    }
+
+    return response_to_frontend
+
+def reveal_battle_models(battle_id: str) -> Optional[Dict[str, str]]:
+    """
+    揭示一场对战的模型名称，并将状态标记为已揭示。
+    """
+    battle = storage.get_battle_record(battle_id)
+    if not battle:
+        logger.warning(f"尝试揭示一个不存在的对战: {battle_id}")
+        return None
+
+    updates = {"revealed": True}
+    storage.update_battle_record(battle_id, updates)
+    
+    logger.info(f"对战 {battle_id} 的模型名称已被揭示。")
+    
+    return {
+        "model_a_id": battle.get("model_a_id"),
+        "model_b_id": battle.get("model_b_id"),
+        "model_a_name": battle.get("model_a_name"),
+        "model_b_name": battle.get("model_b_name"),
+    }

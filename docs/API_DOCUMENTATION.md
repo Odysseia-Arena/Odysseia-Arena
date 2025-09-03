@@ -10,28 +10,77 @@
 
 ## API 端点
 
-### 1. 创建对战
+### 1. 创建或继续对战
 **端点**: `POST /battle`
 
-**描述**: 根据指定的对战等级（高端局或低端局），创建一个新的模型对战。
+**描述**: 这是驱动对话的核心端点。它根据`input`字段是否存在来处理两种主要场景：
+1.  **初次对战 (input 为 `null` 或未提供)**: 系统会为新会话返回一组初始角色消息，供用户选择。
+2.  **连续对话 (提供 `input` 内容)**: 系统会根据 `session_id` 加载当前对话的完整上下文，将新的 `input` 追加进去，然后驱动两个模型生成新的回复。
 
 **请求体**:
 ```json
 {
-    "battle_type": "high_tier",  // 必需。可选值: "high_tier", "low_tier"
-    "discord_id": "123456789"    // （可选）用于速率限制
+    "session_id": "unique_session_123",  // 必需。会话ID
+    "battle_type": "high_tier",          // 必需。可选值: "high_tier", "low_tier"
+    "discord_id": "123456789",           // (可选) 用于速率限制和会话关联。
+    "input": "用户选择的选项或自由输入的内容" // (可选) 如果为null或不提供，则为初次对战。
 }
 ```
 
-**响应示例**:
+**响应示例（场景1: 初次对战 - 需要角色选择）**:
 ```json
 {
-    "battle_id": "fe99a00f-96f1-4990-a856-3d7bd9ceaacf",
-    "prompt": "写一首关于春天的诗",
-    "prompt_theme": "poetry",
-    "response_a": "春风拂面暖如絮...",
-    "response_b": "万物复苏春意浓...",
-    "status": "pending_vote"
+    "battle_id": "a1b2c3d4-...",
+    "config": {
+        "config_id": "test_config",
+        "name": "测试配置"
+    },
+    "character_messages": [
+        {
+            "text": "你在一片古老的森林中醒来...",
+            "options": [
+                "走向小溪，仔细聆听那神秘的歌谣。",
+                "深入森林，探索周围的环境。"
+            ]
+        },
+        {
+            "text": "你在一个未来城市的霓虹灯下醒来...",
+            "options": [
+                "走进最近的酒吧，打听消息。",
+                "检查自己的口袋，看看有什么线索。"
+            ]
+        }
+    ],
+    "status": "pending_character_selection"
+}
+```
+
+**响应示例（场景2: 连续对话 - 返回两个模型的新回复）**:
+```json
+{
+    "battle_id": "e5f6g7h8-...",
+    "response_a": {
+        "text": "你走向了左边的洞穴，里面传来了奇怪的回响...",
+        "options": [
+            "点燃火把，小心翼翼地走进去。",
+            "在洞口大喊，看看有没有回应。",
+            "觉得太危险，决定回到原来的地方。"
+        ]
+    },
+    "response_b": {
+        "text": "你沿着闪光的河流向上走，发现了一座隐藏的瀑布，水声震耳欲聋。",
+        "options": [
+            "试图找到一条绕到瀑布后面的路。",
+            "在瀑布下的水潭里游泳。",
+            "欣赏了一会儿风景，然后原路返回。"
+        ]
+    },
+    "status": "pending_vote",
+    "session_id": "unique_session_123",
+    "config": {
+        "config_id": "test_config",
+        "name": "测试配置"
+    }
 }
 ```
 
@@ -51,8 +100,10 @@
 - **间隔限制**: 两次对战创建之间至少需要间隔30秒。
 
 **注意事项**:
-- 模型名称在投票前不会暴露（盲测）
-- 第二阶段的自定义提示词功能（custom_prompt）已实现但暂时隐藏
+- **会话上下文**: 所有连续对话都依赖于`session_id`来维护上下文。服务器会自动加载、更新和保存上下文。
+- **模型盲测**: 在投票前，响应中不会包含模型名称，以确保公平的盲测。
+- **回答选项生成**: 在连续对话中，系统会为每个模型的新回复分别生成一组独立的建议选项，并内嵌在`response_a`和`response_b`对象中。
+- **模型复用**: 在一个会话中，如果对战结束后没有调用`/reveal`接口揭示模型，下一场对战将复用相同的模型。如果揭示了，下一场对战将重新随机选择模型。
 
 ### 2. 提交投票
 **端点**: `POST /vote/{battle_id}`
@@ -75,9 +126,7 @@
 {
     "status": "success",
     "message": "投票成功提交。",
-    "winner": "gpt-4.1",
-    "model_a_name": "gpt-4.1",
-    "model_b_name": "gemini-2.5-flash"
+    "winner": "model_a"
 }
 ```
 
@@ -86,9 +135,7 @@
 {
     "status": "success",
     "message": "投票成功提交。",
-    "winner": "Skipped",
-    "model_a_name": "gpt-4.1",
-    "model_b_name": "gemini-2.5-flash"
+    "winner": "skip"
 }
 ```
 
@@ -110,7 +157,88 @@
 - 同一Discord用户不能对同一场对战重复投票。
 - 用户ID使用`discord:123456789`格式存储，并进行SHA256哈希处理以保护隐私。
 
-### 3. 获取排行榜
+### 3. 揭示模型名称
+**端点**: `POST /reveal/{battle_id}`
+
+**描述**: 在投票后，揭示一场对战中双方模型的具体名称。调用此接口会将该场对战标记为“已揭示”，这可能会影响会话中下一场对战的模型选择。
+
+**路径参数**:
+- `battle_id`: 对战的唯一标识符
+
+**请求体**: (无)
+
+**响应示例（成功）**:
+```json
+{
+    "model_a_id": "deepseek-v3.1-DS",
+    "model_b_id": "claude-sonnet-4-20250514",
+    "model_a_name": "DeepSeek V3.1 DS",
+    "model_b_name": "Claude Sonnet 4"
+}
+```
+
+**响应示例（失败-对战不存在）**:
+```json
+{
+    "detail": "对战ID不存在或无法揭示。"
+}
+```
+
+### 4. 提交角色消息选择
+**端点**: `POST /character_selection`
+
+**描述**: 在初次对战（input为null）返回character_messages后，用户需要选择其中一个角色消息来继续对战。
+
+**请求体**:
+```json
+{
+    "session_id": "unique_session_123",  // 必需。会话ID
+    "character_messages_id": 0          // 必需。选择的character_messages的索引（从0开始）
+}
+```
+
+**响应示例（成功）**:
+```json
+{
+    "status": "success",
+    "message": "character_message选择已保存，并已添加到对话上下文。",
+    "session_id": "unique_session_123",
+    "selected_index": 0,
+    "selected_message": {
+        "role": "assistant",
+        "content": "你在一片古老的森林中醒来，阳光透过层层叠叠的树叶洒下斑驳的光影。不远处，你看到一条潺潺流淌的小溪，溪水清澈见底，似乎在低声吟唱着古老的歌谣。"
+    },
+    "context_updated": true,
+    "generated_options": [
+        "走向小溪，仔细聆听那神秘的歌谣。",
+        "沿着小溪逆流而上，寻找歌谣的源头。",
+        "深入森林，探索周围的环境。"
+    ]
+}
+```
+
+**响应示例（失败-会话不存在）**:
+```json
+{
+    "detail": "会话不存在。"
+}
+```
+
+**响应示例（失败-无效索引）**:
+```json
+{
+    "detail": "无效的character_messages_id。有效范围: 0-2"
+}
+```
+
+**注意事项**:
+- 只有在初次对战获取到character_messages后才能调用此接口
+- character_messages_id必须在有效范围内（0到character_messages数组长度-1）
+- 选择保存后，会自动将对应的character_message添加到对话上下文（分别处理user_view和assistant_view）
+- context_updated字段表示是否成功添加到上下文
+- 可以通过后续的battle请求继续对战流程，此时会使用包含character_message的完整上下文
+
+### 5. 获取排行榜
 **端点**: `GET /leaderboard`
 
 **描述**: 获取所有模型的当前排名和统计信息，以及周期性评分的更新时间。
@@ -134,22 +262,6 @@
             "rating_realtime": 1552,
             "rating_deviation_realtime": 84,
             "volatility_realtime": 0.0591
-        },
-        {
-            "rank": 2,
-            "model_name": "gemini-2.5-pro",
-            "tier": "low",
-            "rating": 1520,
-            "rating_deviation": 92,
-            "volatility": 0.06,
-            "battles": 12,
-            "wins": 7,
-            "ties": 2,
-            "skips": 3,
-            "win_rate_percentage": 66.67,
-            "rating_realtime": 1518,
-            "rating_deviation_realtime": 91,
-            "volatility_realtime": 0.0602
         }
     ],
     "next_update_time": "2025-08-25T17:00:00"
@@ -167,7 +279,7 @@
   - `skips`: 模型被跳过的次数。
 - **胜率计算**: `(wins + 0.5 * ties) / (battles - skips) * 100`，平局算作半场胜利，跳过的对战不计入有效场次。
 
-### 4. 获取对战详情
+### 6. 获取对战详情
 **端点**: `GET /battle/{battle_id}`
 
 **描述**: 获取指定对战的详细信息。
@@ -175,7 +287,7 @@
 **路径参数**:
 - `battle_id`: 对战的唯一标识符
 
-**响应示例（投票前）**:
+**响应示例（投票前或未揭示）**:
 ```json
 {
     "battle_id": "fe99a00f-96f1-4990-a856-3d7bd9ceaacf",
@@ -187,7 +299,7 @@
 }
 ```
 
-**响应示例（投票后）**:
+**响应示例（投票后且已揭示）**:
 ```json
 {
     "battle_id": "fe99a00f-96f1-4990-a856-3d7bd9ceaacf",
@@ -198,7 +310,8 @@
     "status": "completed",
     "model_a": "gpt-4.1",
     "model_b": "gemini-2.5-flash",
-    "winner": "model_a"
+    "winner": "model_a",
+    "revealed": true
 }
 ```
 
@@ -209,7 +322,7 @@
 }
 ```
 
-### 5. 健康检查
+### 7. 健康检查
 **端点**: `GET /health`
 
 **描述**: 检查服务器运行状态。
@@ -254,7 +367,151 @@
 - 通过前缀区分不同平台用户，避免ID冲突
 - 统一的用户识别和防作弊机制
 
-### 6. 获取上一场对战信息
+## 完整的会话式对战流程
+
+下面是一个典型的、完整的会话式对战流程，展示了各个API端点如何协同工作：
+
+**Step 1: 开始新的对战 (input: null)**
+客户端发起一个没有 `input` 的 `POST /battle` 请求，以获取初始角色消息。
+
+- **Request**: `POST /battle`
+  ```json
+  {
+      "session_id": "session_abc_123",
+      "battle_type": "high_tier"
+  }
+  ```
+- **Response**: 服务器返回 `pending_character_selection` 状态和一组带有预生成选项的角色消息。
+  ```json
+  {
+      "character_messages": [
+          {
+              "text": "你好！",
+              "options": ["你是谁？", "这里是哪里？"]
+          }
+      ],
+      "status": "pending_character_selection"
+  }
+  ```
+
+**Step 2: 用户选择初始消息**
+前端展示 `character_messages` 列表，用户选择其中一个（例如，选择了第0个）。客户端将用户的选择提交到 `/character_selection`。
+
+- **Request**: `POST /character_selection`
+  ```json
+  {
+      "session_id": "session_abc_123",
+      "character_messages_id": 0
+  }
+  ```
+- **Response**: 服务器确认选择已保存，更新上下文，并为下一步自动生成选项。
+  ```json
+  {
+      "status": "success",
+      "message": "character_message选择已保存...",
+      "context_updated": true,
+      "generated_options": [
+          "走向小溪，仔细聆听那神秘的歌谣。",
+          "深入森林，探索周围的环境。"
+      ]
+  }
+  ```
+
+**Step 3: 用户提交第一个输入，继续对战**
+用户提供了第一个输入（可以是自由输入或从生成的选项中选择）。客户端再次调用 `/battle`，这次提供了 `input` 字段。
+
+- **Request**: `POST /battle`
+  ```json
+  {
+      "session_id": "session_abc_123",
+      "battle_type": "high_tier",
+      "input": "你叫什么名字？"
+  }
+  ```
+- **Response**: 服务器加载完整上下文，驱动两个模型生成回复，并返回 `pending_vote` 状态。
+  ```json
+  {
+      "battle_id": "battle_xyz_789",
+      "response_a": {
+           "text": "我是一个AI助手。",
+           "options": ["你有什么功能？", "你是谁创造的？"]
+      },
+      "response_b": {
+           "text": "你可以叫我小智。",
+           "options": ["你为什么叫小智？", "很高兴认识你。"]
+      },
+      "status": "pending_vote"
+   }
+   ```
+
+**Step 4: 用户投票**
+前端展示两个回复，用户进行投票。
+
+- **Request**: `POST /vote/battle_xyz_789`
+  ```json
+  {
+      "vote_choice": "model_b",
+      "discord_id": "user_discord_456"
+  }
+  ```
+- **Response**: 服务器记录投票，并返回胜者标识。
+  ```json
+  {
+      "status": "success",
+      "message": "投票成功提交。",
+      "winner": "model_b"
+  }
+  ```
+
+**Step 5: (可选) 揭示模型**
+用户点击“揭示模型”按钮，客户端调用 `/reveal` 接口。
+
+- **Request**: `POST /reveal/battle_xyz_789`
+- **Response**: 服务器返回模型信息。
+  ```json
+  {
+      "model_a_name": "Model A Name",
+      "model_b_name": "Model B Name",
+      ...
+  }
+  ```
+
+**Step 6: 循环继续**
+在前端，用户可以基于上文继续提供新的 `input`，重复 **Step 3**、**Step 4** 和 **Step 5**，从而形成一个完整的、连续的对话式对战体验。
+
+### 11. 重新生成回答选项
+**端点**: `POST /generate_options`
+
+**描述**: 为当前会话的最新上下文，强制重新生成一组新的回答选项。这在用户对自动生成的选项不满意时非常有用。
+
+**请求体**:
+```json
+{
+    "session_id": "session_abc_123" // 必需。
+}
+```
+
+**响应示例（成功）**:
+```json
+{
+    "status": "success",
+    "session_id": "session_abc_123",
+    "generated_options": [
+        "尝试与洞穴里的生物沟通。",
+        "悄悄地离开，避免惊动任何东西。",
+        "制造一些噪音，看看会发生什么。"
+    ]
+}
+```
+
+**响应示例（失败-会话不存在）**:
+```json
+{
+    "detail": "会话不存在。"
+}
+```
+
+### 7. 获取上一场对战信息
 **端点**: `POST /battleback`
 
 **描述**: 获取用户上一场对战的状态和信息。用于在用户有未完成的对战时，召回对战信息。
@@ -294,7 +551,7 @@
 }
 ```
 
-### 7. 脱离卡死
+### 8. 脱离卡死
 **端点**: `POST /battleunstuck`
 
 **描述**: 清除用户所有卡在**模型响应生成阶段** (`pending_generation`) 的对战。这是一个应急接口，用于解决因模型API调用失败或超时，导致用户无法创建新对战的问题。此接口**不会**清除已经生成完毕、等待投票 (`pending_vote`) 的对战。
@@ -326,7 +583,35 @@
     "message": "没有找到需要清除的对战。"
 }
 ```
-### 8. 获取对战统计矩阵
+
+### 9. 获取用户最新的会话ID
+**端点**: `POST /sessions/latest`
+
+**描述**: 根据 `discord_id` 获取用户最近一次活跃的 `session_id`。这对于在客户端重新加载时恢复用户的上一个会话非常有用。
+
+**请求体**:
+```json
+{
+    "discord_id": "123456789"
+}
+```
+
+**响应示例（成功）**:
+```json
+{
+    "session_id": "unique_session_123",
+    "turn_count": 5
+}
+```
+
+**响应示例（失败-未找到）**:
+```json
+{
+    "detail": "未找到该用户的会话记录。"
+}
+```
+
+### 10. 获取对战统计矩阵
 **端点**: `GET /api/battle_statistics`
 
 **描述**: 获取所有模型之间的详细对战统计数据，包括1v1胜率矩阵和总对战场次矩阵。
@@ -373,7 +658,7 @@
 - **`match_count_matrix`**:
   - `match_count_matrix["Model A"]["Model B"]` 的值表示模型A和模型B之间进行的总对战场次（包括平局）。
   - 这是一个对称矩阵，即 `match_count_matrix["Model A"]["Model B"]` 等于 `match_count_matrix["Model B"]["Model A"]`。
-### 9. 获取提示词统计
+### 11. 获取提示词统计
 **端点**: `GET /api/prompt_statistics`
 
 **描述**: 获取基于每个提示词的详细对战统计信息，按总对战场次降序排列。
