@@ -1,0 +1,22 @@
+{
+  "comment": "这个文件定义了每个模型ID可以使用的预设文件列表（位于SillyTavernOdysseia/data/presets/目录下）。",
+  "default": [
+    "test_preset.simplified.json"
+  ],
+  "test_model": [
+    "test_preset.simplified.json",
+    "xiaomao_god_3.0.simplified_fixed.json"
+  ],
+  "gpt-4-1106-preview": [
+    "test_preset.simplified.json"
+  ],
+  "deepseek-coder-33b-instruct": [
+    "xiaomao_god_3.0.simplified_fixed.json"
+  ],
+  "models/gemini-2.5-flash": [
+    "test_preset.simplified.json"
+  ],
+  "models/gemini-2.5-pro": [
+    "test_preset.simplified.json"
+  ]
+}

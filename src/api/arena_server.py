@@ -5,6 +5,8 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict
 import time
 import datetime
+import uuid
+import json
 
 # 导入核心模块
 from src.utils import config
@@ -20,6 +22,7 @@ from src.background import rating_updater
 from src.background import database_backup
 from src.controllers import tier_manager
 from src.services import statistics_calculator
+from src.services.session_manager import process_battle_input
 
 # 初始化FastAPI应用
 app = FastAPI(title="创意写作大模型竞技场后端", version="1.0.0")
@@ -89,11 +92,14 @@ async def startup_event():
 # --- Pydantic模型定义（用于请求体验证和响应结构） ---
 
 class BattleRequest(BaseModel):
+    # 会话ID
+    session_id: str
     # 对战类型，现在是 'high_tier' 或 'low_tier'
     battle_type: str
-    # 自定义提示词字段保留，但当前逻辑不使用
-    custom_prompt: Optional[str] = None
-    discord_id: Optional[str] = None # 添加 discord_id 字段
+    # Discord用户ID字段，用于速率限制
+    discord_id: Optional[str] = None
+    # 用户输入内容
+    input: Optional[str] = None
 
 class BattleBackRequest(BaseModel):
     discord_id: str
@@ -101,41 +107,85 @@ class BattleBackRequest(BaseModel):
 class UnstuckRequest(BaseModel):
     discord_id: str
 
+class LatestSessionRequest(BaseModel):
+    discord_id: str
+
 class VoteRequest(BaseModel):
     vote_choice: str # "model_a", "model_b", 或 "tie"
     discord_id: str # Discord用户ID
+
+class RevealRequest(BaseModel):
+    battle_id: str
+
+class RevealResponse(BaseModel):
+    model_a_id: Optional[str] = None
+    model_b_id: Optional[str] = None
+    model_a_name: Optional[str] = None
+    model_b_name: Optional[str] = None
+
+class CharacterMessageSelectionRequest(BaseModel):
+    session_id: str
+    character_messages_id: int  # character_messages的序号/索引
+    discord_id: Optional[str] = None # 关联用户
+
+class GenerateOptionsRequest(BaseModel):
+    session_id: str
+    discord_id: Optional[str] = None # 关联用户
 
 # --- API端点 ---
 
 @app.post("/battle", status_code=status.HTTP_201_CREATED)
 async def create_battle(request_body: BattleRequest):
-    """创建新的对战"""
-    logger.info(f"Received request for /battle from discord_id: {request_body.discord_id}")
+    """创建或继续一场对战"""
+    logger.info(f"Received request for /battle from session_id: {request_body.session_id}, discord_id: {request_body.discord_id}")
     try:
-        # 验证对战类型是否有效
+        # 验证对战类型
         if request_body.battle_type not in ["high_tier", "low_tier"]:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="无效的对战类型。请选择 'high_tier' (高端) 或 'low_tier' (低端)。"
-            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="无效的对战类型。")
 
-        battle_details = await battle_controller.create_battle(
-            battle_type=request_body.battle_type,
-            custom_prompt=request_body.custom_prompt,
-            discord_id=request_body.discord_id
-        )
-        
-        # 如果 battle_details 为 None，说明对战在生成时被 unstuck 命令取消了
-        if battle_details is None:
-            log_event("BATTLE_CANCELLED_DURING_GENERATION", {"discord_id": request_body.discord_id})
-            # 返回 409 Conflict，并提供明确的错误信息
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="此对战已被取消"
-            )
+        # 检查是创建新对战还是继续对战
+        if request_body.input is None:
+            # --- 场景1: input为null，进行初次对战设置 ---
+            logger.info(f"Processing initial battle setup for session_id: {request_body.session_id}")
+            
+            input_result = await process_battle_input(session_id=request_body.session_id,
+                                                      input_string=None,
+                                                      discord_id=request_body.discord_id,
+                                                      battle_type=request_body.battle_type)
+            
+            if input_result.get("status") != "success":
+                error_detail = input_result.get('error', '未知错误')
+                raise HTTPException(status_code=500, detail=f"输入处理失败: {error_detail}")
 
-        log_event("BATTLE_CREATED", {"battle_id": battle_details["battle_id"], "type": request_body.battle_type})
-        return battle_details
+            # 直接从结果中获取处理好的 character_messages 列表
+            character_messages_list = input_result.get("character_messages")
+            
+            if not character_messages_list or not isinstance(character_messages_list, list):
+                raise HTTPException(status_code=500, detail="API响应中缺少有效的character_messages列表")
+
+            return {
+                "battle_id": str(uuid.uuid4()), # 这是一个临时的ID，真正的battle在用户选择后创建
+                "config": input_result.get("config_data"),
+                "character_messages": character_messages_list,
+                "status": "pending_character_selection"
+            }
+        else:
+            # --- 场景2: input不为null，用户提交了选择，继续对战 ---
+            logger.info(f"Continuing battle for session_id: {request_body.session_id}")
+            
+            # battle_controller.continue_battle_with_selection 现在会处理所有逻辑，包括保存
+            battle_response = await battle_controller.continue_battle_with_selection(
+                session_id=request_body.session_id,
+                user_input=request_body.input,
+                battle_type=request_body.battle_type,
+                discord_id=request_body.discord_id
+            )
+            
+            battle_id = battle_response["battle_id"]
+            log_event("BATTLE_CONTINUED", {"battle_id": battle_id, "session_id": request_body.session_id})
+
+            # 返回匿名化的对战数据 (选项生成已移至controller)
+            return battle_response
     except RateLimitError as e:
         # 捕获速率限制错误
         log_event("RATE_LIMIT_EXCEEDED", {"discord_id": request_body.discord_id, "error": str(e)})
@@ -212,6 +262,24 @@ async def unstuck_battle_endpoint(request_body: UnstuckRequest):
     except Exception as e:
         logger.exception("处理 /battleunstuck 请求时发生未知错误")
         log_error(f"处理 /battleunstuck 时发生未知错误: {e}", {"discord_id": request_body.discord_id})
+        raise HTTPException(status_code=500, detail="服务器内部错误。")
+
+@app.post("/sessions/latest", status_code=status.HTTP_200_OK)
+async def get_latest_session(request_body: LatestSessionRequest):
+    """获取指定discord_id的最新session_id和对话轮数"""
+    logger.info(f"Received request for latest session for discord_id: {request_body.discord_id}")
+    try:
+        session_info = storage.get_latest_session_info_by_discord_id(request_body.discord_id)
+        if not session_info:
+            raise HTTPException(status_code=404, detail="未找到该用户的会话记录。")
+        
+        log_event("LATEST_SESSION_FETCHED", {"discord_id": request_body.discord_id, "session_id": session_info["session_id"]})
+        return session_info
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.exception("获取最新会话时发生未知错误")
+        log_error(f"获取最新会话时发生未知错误: {e}", {"discord_id": request_body.discord_id})
         raise HTTPException(status_code=500, detail="服务器内部错误。")
 
 @app.post("/vote/{battle_id}")
@@ -301,28 +369,24 @@ async def get_battle_details(battle_id: str):
     if not battle:
         raise HTTPException(status_code=404, detail="对战ID不存在。")
     
-    # 关键逻辑：如果比赛未完成（pending_vote），隐藏模型名称以保持盲测
-    if battle["status"] != "completed":
-        return {
-            "battle_id": battle["battle_id"],
-            "prompt": battle["prompt"],
-            "prompt_theme": battle.get("prompt_theme", "general"),
-            "response_a": battle["response_a"],
-            "response_b": battle["response_b"],
-            "status": battle["status"]
-        }
+    # Start with a copy of the battle record
+    battle_details = dict(battle)
+
+    # If the battle has been revealed, add the friendly 'model_a' and 'model_b' keys.
+    if battle_details.get("revealed"):
+        battle_details["model_a"] = battle_details.pop("model_a_name", battle_details.get("model_a_id"))
+        battle_details["model_b"] = battle_details.pop("model_b_name", battle_details.get("model_b_id"))
     
-    # 如果比赛已完成，返回完整详情（包括模型名称和结果）
-    # 将 model_a_id/b_id 重命名为 model_a/b 以匹配API文档
-    battle["model_a"] = battle.pop("model_a_name", battle.get("model_a_id"))
-    battle["model_b"] = battle.pop("model_b_name", battle.get("model_b_id"))
-    battle.pop("model_a_id", None)
-    battle.pop("model_b_id", None)
-    
-    if battle.get("winner") == "tie":
-        battle["winner"] = "Tie"
+    # Always remove the specific id/name keys to avoid leaking info.
+    battle_details.pop("model_a_id", None)
+    battle_details.pop("model_b_id", None)
+    battle_details.pop("model_a_name", None)
+    battle_details.pop("model_b_name", None)
+
+    if battle_details.get("winner") == "tie":
+        battle_details["winner"] = "Tie"
         
-    return battle
+    return battle_details
 
 # --- 新增的统计信息端点 ---
 @app.get("/api/battle_statistics")
@@ -349,6 +413,104 @@ async def get_prompt_statistics():
         log_error(f"生成提示词统计数据时发生错误: {e}", {"step": "get_prompt_statistics"})
         raise HTTPException(status_code=500, detail="无法生成提示词统计数据。")
 
+# --- Character Messages 选择端点 ---
+@app.post("/character_selection")
+async def submit_character_selection(request_body: CharacterMessageSelectionRequest):
+    """用户提交选择的character_message"""
+    logger.info(f"Received character selection request for session_id: {request_body.session_id}")
+    try:
+        from src.services.session_manager import SessionManager
+        
+        session_manager = SessionManager()
+        
+        # 验证session是否存在
+        session = session_manager.get_or_create_session(request_body.session_id, discord_id=request_body.discord_id)
+        if not session:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="会话不存在或无法创建。"
+            )
+        
+        # 验证character_messages是否存在
+        if not session.character_messages_user_view:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="该会话尚未获取character_messages。"
+            )
+        
+        # 解析character_messages并验证索引
+        try:
+            character_messages_user = json.loads(session.character_messages_user_view)
+        except json.JSONDecodeError:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="character_messages数据格式错误。"
+            )
+        
+        if not (0 <= request_body.character_messages_id < len(character_messages_user)):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"无效的character_messages_id。有效范围: 0-{len(character_messages_user)-1}"
+            )
+        
+        # 保存用户选择
+        success = session_manager.set_character_message_selection(
+            request_body.session_id,
+            request_body.character_messages_id
+        )
+        
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="保存character_message选择失败。"
+            )
+        
+        # 将选择的character_message添加到上下文
+        context_success = session_manager.add_selected_message_to_context(request_body.session_id, discord_id=request_body.discord_id)
+        
+        if not context_success:
+            # 如果添加到上下文失败，记录但不阻止响应
+            logger.warning(f"添加character_message到上下文失败，session_id: {request_body.session_id}")
+        
+        # 自动生成第一组选项
+        from src.services.response_generator import response_option_generator
+        generated_options = await response_option_generator.generate_options_for_session(
+            request_body.session_id,
+            discord_id=request_body.discord_id
+        )
+
+        # 获取选择的消息（user_view）用于响应
+        selected_message = character_messages_user[request_body.character_messages_id]
+        
+        log_event("CHARACTER_MESSAGE_SELECTED", {
+            "session_id": request_body.session_id,
+            "selected_index": request_body.character_messages_id,
+            "context_added": context_success,
+            "options_generated": len(generated_options)
+        })
+        
+        return {
+            "status": "success",
+            "message": "character_message选择已保存，并已添加到对话上下文。",
+            "session_id": request_body.session_id,
+            "selected_index": request_body.character_messages_id,
+            "selected_message": selected_message,
+            "context_updated": context_success,
+            "generated_options": generated_options
+        }
+        
+    except HTTPException as e:
+        # 重新抛出已处理的HTTP异常
+        raise e
+    except Exception as e:
+        # 处理未知错误
+        logger.exception("处理character_message选择时发生未知错误")
+        log_error(f"处理character_message选择时发生未知错误: {e}", {"step": "character_selection"})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="处理character_message选择时发生内部错误。"
+        )
+
 # 健康检查端点
 @app.get("/health")
 async def health_check():
@@ -367,3 +529,56 @@ async def health_check():
     except Exception as e:
         logger.exception("健康检查时发生数据库错误")
         raise HTTPException(status_code=503, detail=f"数据库服务不可用: {e}")
+
+@app.post("/reveal/{battle_id}", response_model=RevealResponse)
+async def reveal_models(battle_id: str):
+    """揭示一场对战的模型名称"""
+    logger.info(f"Received request to reveal models for battle_id: {battle_id}")
+    try:
+        model_info = battle_controller.reveal_battle_models(battle_id)
+        if not model_info:
+            raise HTTPException(status_code=404, detail="对战ID不存在或无法揭示。")
+        
+        log_event("MODELS_REVEALED", {"battle_id": battle_id})
+        return model_info
+        
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.exception(f"揭示模型时发生未知错误 for battle {battle_id}")
+        log_error(f"揭示模型时发生未知错误: {e}", {"battle_id": battle_id})
+        raise HTTPException(status_code=500, detail="揭示模型时发生服务器内部错误。")
+
+@app.post("/generate_options", status_code=status.HTTP_200_OK)
+async def generate_options_endpoint(request_body: GenerateOptionsRequest):
+    """为当前会话上下文重新生成回答选项。"""
+    logger.info(f"Received request to regenerate options for session_id: {request_body.session_id}")
+    try:
+        from src.services.response_generator import response_option_generator
+        from src.services.session_manager import SessionManager
+
+        # 检查会话是否存在
+        session_manager = SessionManager()
+        session = session_manager.get_or_create_session(request_body.session_id, discord_id=request_body.discord_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="会话不存在。")
+
+        # 生成新选项
+        new_options = await response_option_generator.generate_options_for_session(request_body.session_id)
+
+        log_event("OPTIONS_REGENERATED", {
+            "session_id": request_body.session_id,
+            "options_count": len(new_options)
+        })
+
+        return {
+            "status": "success",
+            "session_id": request_body.session_id,
+            "generated_options": new_options
+        }
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.exception(f"重新生成选项时发生未知错误 for session {request_body.session_id}")
+        log_error(f"重新生成选项时发生未知错误: {e}", {"session_id": request_body.session_id})
+        raise HTTPException(status_code=500, detail="重新生成选项时发生服务器内部错误。")

@@ -116,20 +116,9 @@ def submit_vote(battle_id: str, vote_choice: str, discord_id: str) -> Dict:
     model_a_name = battle["model_a_name"]
     model_b_name = battle["model_b_name"]
     
-    # 确定获胜者名称以返回给用户
-    if winner == "model_a":
-        winner_name = model_a_name
-    elif winner == "model_b":
-        winner_name = model_b_name
-    elif winner == "tie":
-        winner_name = "Tie"
-    else: # skip
-        winner_name = "Skipped"
-
+    # 根据新规则，投票后不再返回模型具体名称，只返回标识
     return {
         "status": "success",
         "message": "投票成功提交。",
-        "winner": winner_name,
-        "model_a_name": model_a_name,
-        "model_b_name": model_b_name
+        "winner": winner
     }

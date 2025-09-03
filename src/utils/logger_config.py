@@ -13,7 +13,7 @@ def setup_logger():
     os.makedirs(LOG_DIR, exist_ok=True)
     
     logger = logging.getLogger("ArenaLogger")
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG)
 
     # 防止重复添加处理器
     if logger.handlers:
@@ -22,14 +22,14 @@ def setup_logger():
     # 文件处理器 (记录到文件)
     try:
         fh = logging.FileHandler(LOG_FILE, encoding='utf-8')
-        fh.setLevel(logging.INFO)
+        fh.setLevel(logging.DEBUG)
     except IOError as e:
         print(f"警告: 无法打开日志文件 {LOG_FILE}: {e}")
         fh = None
 
     # 控制台处理器 (输出到控制台)
     ch = logging.StreamHandler()
-    ch.setLevel(logging.INFO) # 控制台输出所有级别的日志
+    ch.setLevel(logging.DEBUG) # 控制台输出所有级别的日志
 
     # 定义格式化器
     # 使用简单的字符串格式，方便阅读
