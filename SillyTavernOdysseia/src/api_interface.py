@@ -18,8 +18,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 # 导入现有服务模块
-from .services.config_manager import ConfigManager, create_config_manager
-from .services.chat_history_manager import ChatHistoryManager, MessageRole, ChatMessage
+from .services.chat_history_manager import ChatHistoryManager, MessageRole, ChatMessage, WorldBookEntry
 
 
 @dataclass
@@ -320,10 +319,9 @@ class ChatAPI:
         初始化API接口
         
         Args:
-            data_root: 数据根目录，默认为"data"
+            data_root: 数据根目录，默认为"data"（仅用于引用，不读写文件）
         """
         self.data_root = data_root
-        self.config_manager = create_config_manager(data_root)
     
     def chat_input_json(self, request_data: Union[str, Dict[str, Any], ChatRequest]) -> ChatResponse:
         """
@@ -363,11 +361,6 @@ class ChatAPI:
         
         return response
     
-    # chat_input 方法将被废弃或重构，因为它依赖 config_id
-    # 为了保持兼容性，我们可以暂时保留它，但内部调用会失败
-    # 或者直接移除它，强制用户使用新的 chat_input_json 接口
-    # 这里我们选择注释掉它，鼓励使用新接口
-    # def chat_input(...)
     
     def _process_chat_request(self, request: ChatRequest) -> ChatResponse:
         """
@@ -449,12 +442,54 @@ class ChatAPI:
 
         # 加载通用世界书（如果有）
         if request.additional_world_book:
-            # 现在 ConfigManager 仍然用于辅助功能，比如合并世界书
-            # 注意：这里的 config_manager 实例是在 ChatAPI 初始化时创建的
-            self.config_manager.merge_additional_world_book(manager, {"world_book": request.additional_world_book})
+            # 直接合并世界书，不再依赖config_manager
+            self._merge_additional_world_book(manager, {"world_book": request.additional_world_book})
             
         return manager
     
+    def _merge_additional_world_book(self, manager: ChatHistoryManager, world_book_data: Dict[str, Any]) -> None:
+        """将通用世界书合并到管理器中"""
+        if "world_book" not in world_book_data:
+            return
+        
+        additional_world_book = world_book_data["world_book"]
+        if "entries" not in additional_world_book:
+            return
+        
+        # 获取当前最大的ID，避免冲突
+        max_id = 0
+        for entry in manager.world_book_entries:
+            # id可能不存在，需要检查
+            if hasattr(entry, 'id') and entry.id is not None:
+                max_id = max(max_id, entry.id)
+        
+        # 添加通用世界书条目
+        for entry_data in additional_world_book["entries"]:
+            # 分配新的ID避免冲突
+            max_id += 1
+            
+            # 提取排序字段：优先使用insertion_order，最后是默认值
+            order = entry_data.get("insertion_order", 100)
+            
+            # 提取enabled表达式
+            enabled_expr = entry_data.get("enabled", True)
+                
+            entry = WorldBookEntry(
+                id=entry_data.get("id", max_id),
+                name=entry_data.get("name", ""),
+                enabled=True,  # 初始值，运行时动态计算
+                mode=entry_data.get("mode", "conditional"),
+                position=entry_data.get("position", "before_char"),
+                keys=entry_data.get("keys", []),
+                content=entry_data.get("content", ""),
+                depth=entry_data.get("depth"),
+                order=order,
+                code_block=entry_data.get("code_block"),  # 代码块
+                enabled_expression=enabled_expr,  # 保存原始表达式
+                enabled_cached=None
+            )
+            manager.world_book_entries.append(entry)
+
     def _handle_character_message(self, request_id: str, manager: ChatHistoryManager, output_formats: List[str]) -> ChatResponse:
         """处理角色卡消息（无用户输入）"""
         
@@ -792,44 +827,7 @@ class ChatAPI:
         
         return user_view, assistant_view
     
-    def add_assistant_message(self, session_id: str, assistant_message: str) -> bool:
-        """(已废弃)"""
-        print("⚠️ add_assistant_message() is deprecated in stateless mode.")
-        return False
     
-    def get_conversation_history(self, session_id: str) -> List[Dict[str, Any]]:
-        """(已废弃)"""
-        print("⚠️ get_conversation_history() is deprecated in stateless mode.")
-        return []
-    
-    def clear_conversation(self, session_id: str) -> bool:
-        """(已废弃)"""
-        print("⚠️ clear_conversation() is deprecated in stateless mode.")
-        return False
-    
-    def list_available_configs(self) -> List[Dict[str, Any]]:
-        """
-        列出所有可用配置
-        
-        Returns:
-            List[Dict]: 配置信息列表
-        """
-        try:
-            configs = self.config_manager.list_configs()
-            return [
-                {
-                    "config_id": config.config_id,
-                    "name": config.name,
-                    "description": config.description,
-                    "components": config.components,
-                    "tags": config.tags,
-                    "last_used": config.last_used
-                }
-                for config in configs
-            ]
-        except Exception as e:
-            print(f"⚠️ 列出配置失败: {e}")
-            return []
     
     def _build_character_messages_with_context(self, request_id: str, manager: ChatHistoryManager, raw_character_messages: List[str]) -> Dict[str, List[Dict[str, str]]]:
         """为character_messages构建包含上下文的user_view和assistant_view
@@ -932,8 +930,6 @@ def create_chat_api(data_root: str = "data") -> ChatAPI:
     return ChatAPI(data_root)
 
 
-# 简化的函数接口 (chat) 已被废弃，因为它依赖 config_id
-
 # 使用示例
 if __name__ == "__main__":
     import json
@@ -941,46 +937,44 @@ if __name__ == "__main__":
     # 创建API实例
     api = create_chat_api()
     
-    # 列出可用配置（这个功能仍然有用，可以用于获取模板数据）
-    configs = api.list_available_configs()
-    print("可用配置:", configs)
-    
     # 示例对话
-    
     # --- 构建新的请求 ---
-    # 假设我们从文件加载数据来构建请求
-    # 在实际使用中，这些数据将由客户端直接提供
-    with open("data/characters/test_character.simplified.json", "r", encoding="utf-8") as f:
-        char_data = json.load(f)
-    with open("data/presets/test_preset.simplified.json", "r", encoding="utf-8") as f:
-        preset_data = json.load(f)
-    with open("data/world_books/test_world.json", "r", encoding="utf-8") as f:
-        world_data = json.load(f)
-        
+    # 直接提供数据构建请求
     request_data = {
-        "character": char_data,
-        "preset": preset_data,
-        "additional_world_book": world_data,
+        "character": {
+            "name": "测试角色",
+            "description": "这是一个测试角色",
+            "personality": "友好、乐于助人",
+            "message": ["你好，我是测试角色！"]
+        },
+        "preset": {
+            "name": "测试预设",
+            "system_prompt": "你是一个AI助手，请保持友善。"
+        },
+        "additional_world_book": {
+            "world_book": {
+                "name": "测试世界",
+                "entries": [
+                    {
+                        "name": "测试条目",
+                        "keys": ["测试"],
+                        "content": "这是一个测试世界书条目"
+                    }
+                ]
+            }
+        },
         "input": [{"role": "user", "content": "你好！"}],
         "output_formats": ["clean", "processed"]
     }
 
-    # 1. 发送请求
-    print("\n=== 用户对话 (新接口) ===")
+    # 发送请求
+    print("\n=== 用户对话 (JSON接口) ===")
     response = api.chat_input_json(request_data)
     
     if response.clean_prompt_with_regex:
         print(f"最终提示词长度 (clean): {len(response.clean_prompt_with_regex)}")
-        # print(json.dumps(response.clean_prompt_with_regex, ensure_ascii=False, indent=2))
     
     if response.processed_prompt_with_regex:
         print(f"最终提示词长度 (processed): {len(response.processed_prompt_with_regex)}")
 
     print(f"处理信息: {response.processing_info}")
-    
-    # 2. 添加AI回复
-    # api.add_assistant_message(session_id, "你好！很高兴认识你！")
-    
-    # 3. 查看对话历史
-    # history = api.get_conversation_history(session_id)
-    # print(f"\n对话历史消息数: {len(history)}")

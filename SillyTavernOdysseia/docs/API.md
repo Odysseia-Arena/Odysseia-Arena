@@ -12,7 +12,7 @@
 - ✅ **🌟 新：用户视图和AI视图**：针对每种输入格式（raw、processed、clean）提供对应的用户视图和AI视图
 - ✅ **🌟 新：前缀变量访问**：`world_var`、`preset_var` 等跨作用域访问
 - ✅ **🌟 新：统一执行顺序**：单遍按词条处理，确保变量依赖正确
-- ✅ **输入接口**：处理配置ID、对话历史，返回最终提示词
+- ✅ **输入接口**：处理对话历史和内联数据，返回最终提示词
 - ✅ **输出接口**：返回来源ID和处理后的提示词  
 - ✅ **角色卡消息**：当无输入时返回角色卡的所有message
 - ✅ **完整处理**：集成宏处理、Python沙盒、世界书等功能
@@ -637,23 +637,6 @@ if response.clean_prompt_with_regex:
 
 以下是构成 `ChatAPI` 的底层核心服务。通常情况下，你不需要直接与它们交互，但了解它们有助于更深入地理解系统的工作原理。
 
-### ConfigManager
-
-配置管理器，负责管理由预设、角色卡、玩家卡和世界书等组件构成的聊天配置组合。
-
-#### 初始化
-```python
-from src.services.config_manager import create_config_manager
-
-config_manager = create_config_manager(data_root="data")
-```
-
-#### 主要方法
-
-- `create_config()`: 创建一个新的聊天配置组合。
-- `save_config()` / `load_config()`: 保存和加载配置。
-- `set_current_config()`: 设置当前活动的配置。
-
 ### ChatHistoryManager
 
 聊天历史管理器，是整个系统的核心协调器。它负责管理对话历史，并调用其他服务（如宏处理、代码执行）来构建最终的提示词。
@@ -667,46 +650,66 @@ config_manager = create_config_manager(data_root="data")
 
 （已废弃）对话管理器，不再负责对话的持久化存储。
 
-## 文件格式
+## 内联数据格式
 
-### 配置文件
+在API请求中，可以直接传入以下格式的数据：
+
+### 角色卡数据
 ```json
 {
-  "config_id": "配置ID",
-  "name": "配置名称",
-  "description": "配置描述",
-  "components": {
-    "preset": "文件名.simplified.json",
-    "character": "文件名.simplified.json",
-    "persona": "文件名.json",
-    "additional_world_book": "文件名.json",
-    "regex_rules": ["规则文件1.json", "规则文件2.json"]
-  },
-  "tags": ["标签"],
-  "created_date": "2025-01-01",
-  "last_used": "2025-01-15"
+  "name": "角色名称",
+  "description": "角色描述",
+  "personality": "角色性格",
+  "scenario": "角色场景",
+  "message": ["初始消息1", "初始消息2"],
+  "tags": ["标签"]
 }
 ```
 
-### 玩家卡文件
+### 预设数据
+```json
+{
+  "name": "预设名称",
+  "system_prompt": "系统提示内容",
+  "description": "预设描述",
+  "entries": [
+    {
+      "name": "预设条目名称",
+      "content": "预设条目内容",
+      "injection_order": 100,
+      "enabled": true,
+      "code_block": "Python代码块"
+    }
+  ]
+}
+```
+
+### 玩家卡数据
 ```json
 {
   "name": "玩家名称",
-  "description": "描述",
-  "tags": ["标签"],
-  "created_date": "2025-01-01"
+  "description": "描述"
 }
 ```
 
-### 通用世界书文件
+### 世界书数据
 ```json
 {
   "world_book": {
     "name": "世界书名称",
-    "entries": [...]
-  },
-  "tags": ["标签"],
-  "created_date": "2025-01-01"
+    "entries": [
+      {
+        "id": 1,
+        "name": "条目名称",
+        "mode": "conditional",
+        "keys": ["关键词1", "关键词2"],
+        "content": "条目内容",
+        "enabled": true,
+        "position": "before_char",
+        "order": 100
+      }
+    ]
+  }
 }
 ```
 
@@ -714,12 +717,12 @@ config_manager = create_config_manager(data_root="data")
 
 ### 常见错误
 
-1. **FileNotFoundError**: 文件不存在
+1. **ValueError**: 请求验证失败
    ```python
    try:
-       config = config_manager.load_config("nonexistent")
-   except FileNotFoundError:
-       print("配置文件不存在")
+       response = api.chat_input_json(invalid_request)
+   except ValueError as e:
+       print(f"输入数据验证失败: {e}")
    ```
 
 2. **MacroError**: 宏处理错误
@@ -730,8 +733,10 @@ config_manager = create_config_manager(data_root="data")
 
 3. **JSONDecodeError**: JSON格式错误
    ```python
-   # 在加载配置或数据文件时可能出现
-   # 检查文件格式是否正确
+   try:
+       request = ChatRequest.from_json(invalid_json_string)
+   except Exception as e:
+       print(f"JSON解析失败: {e}")
    ```
 
 ## Python沙盒安全
@@ -760,12 +765,14 @@ config_manager = create_config_manager(data_root="data")
 ### 1. 错误处理
 ```python
 try:
-    config = config_manager.load_config("my_config")
-    manager = config_manager.load_chat_manager(config)
-except FileNotFoundError:
-    print("配置文件不存在")
+    # 创建请求对象
+    request = ChatRequest.from_json(request_data)
+    # 发送请求
+    response = api.chat_input_json(request)
+except ValueError as e:
+    print(f"请求验证失败: {e}")
 except Exception as e:
-    print(f"加载失败: {e}")
+    print(f"处理失败: {e}")
 ```
 
 ### 2. 作用域管理
@@ -898,10 +905,10 @@ for block_result in result["results"]:
 
 ## 📋 **功能特性总览**
 
-### 1. 配置管理
-- 支持预设(preset)、角色卡(character)、玩家卡(persona)、世界书(world_book)的组合配置
-- 自动加载和验证配置组件
-- 支持配置列表和切换
+### 1. 数据处理
+- 直接支持内联数据：预设(preset)、角色卡(character)、玩家卡(persona)、世界书(world_book)
+- 无需配置文件，直接在请求中传入完整数据
+- 纯无状态设计，每次请求独立处理
 
 ### 2. 对话管理
 - (无状态，无需管理)
@@ -964,29 +971,41 @@ for block_result in result["results"]:
 
 ### 📋 **通用建议**
 
-1. **配置管理**: 先创建完整的配置组合，包含所需的所有组件
-2. **会话管理**: (无状态，无需管理)
+1. **数据准备**: 在客户端准备好完整的内联数据结构
+2. **无状态设计**: 每次API调用都是独立的，不依赖服务器端状态
 3. **错误处理**: API内置了完整的错误处理和降级机制
-4. **性能优化**: 对话历史和配置会被自动缓存
-5. **扩展性**: 支持添加新的配置组件和自定义处理逻辑
+4. **性能优化**: 请尽量只请求需要的输出格式
+5. **扩展性**: 支持自定义正则规则和内联世界书数据
 
 ### 🚀 **最佳实践**
 
 ```python
 # ✅ 推荐：使用JSON输入格式
 request = {
-    "character": char_data,
-    "preset": preset_data,
-    "input": conversation_history,  # 完整对话历史
+    "character": {
+        "name": "助手",
+        "description": "一个乐于助人的AI助手",
+        "personality": "友好、专业、有知识",
+        "message": ["你好！我是你的AI助手，有什么我能帮你的吗？"]
+    },
+    "preset": {
+        "name": "基础预设",
+        "system_prompt": "你是一个AI助手，请保持友善。"
+    },
+    "input": conversation_history,  # 完整对话历史，OpenAI格式
     "output_formats": ["clean"]     # 只要最终格式
 }
 
 response = api.chat_input_json(request)
-clean_messages = response.clean_prompt
+
+# 获取用户视图和AI视图
+response_data = json.loads(response.to_json())
+user_view = response_data.get('clean_prompt', {}).get('user_view', [])
+assistant_view = response_data.get('clean_prompt', {}).get('assistant_view', [])
 
 # 直接用于AI API调用
 openai_response = client.chat.completions.create(
     model="gpt-4",
-    messages=clean_messages
+    messages=assistant_view  # 使用AI视图作为模型输入
 )
 ```
