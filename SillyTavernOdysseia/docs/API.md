@@ -73,6 +73,7 @@ api = create_chat_api(data_root="data")
 # 注意：不再使用 config_id，而是直接内联数据
 conversation_request = {
     "character": { "...": "..." },          # 角色卡数据
+    "persona": { "...": "..." },            # 玩家用户数据
     "preset": { "...": "..." },             # 预设数据
     "additional_world_book": { "...": "..." }, # 额外世界书数据
     "regex_rules": [{ "...": "..." }],      # 正则规则列表
