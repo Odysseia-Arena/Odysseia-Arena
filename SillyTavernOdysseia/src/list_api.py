@@ -11,7 +11,6 @@
 - 世界书列表
 - 正则规则列表
 - 配置列表
-- 对话历史列表
 """
 
 from __future__ import annotations
@@ -22,7 +21,6 @@ from typing import Dict, List, Any, Optional, Union
 from dataclasses import dataclass, field
 
 from .services.config_manager import create_config_manager, ChatConfig
-from .services.conversation_manager import create_conversation_manager
 
 
 @dataclass
@@ -34,7 +32,6 @@ class ListsResponse:
     world_books: List[str] = field(default_factory=list) # 世界书列表
     regex_rules: List[str] = field(default_factory=list) # 正则规则列表
     configs: List[Dict[str, Any]] = field(default_factory=list)  # 配置列表
-    conversations: List[Dict[str, Any]] = field(default_factory=list)  # 对话历史列表
     
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
@@ -45,7 +42,6 @@ class ListsResponse:
             'world_books': self.world_books,
             'regex_rules': self.regex_rules,
             'configs': self.configs,
-            'conversations': self.conversations
         }
     
     def to_json(self) -> str:
@@ -83,7 +79,6 @@ class ConfigResponse:
 
 # 共享实例
 _config_manager = None
-_conversation_manager = None
 
 def _get_config_manager(data_root: str = "data"):
     """获取共享的配置管理器实例"""
@@ -91,13 +86,6 @@ def _get_config_manager(data_root: str = "data"):
     if _config_manager is None:
         _config_manager = create_config_manager(data_root)
     return _config_manager
-
-def _get_conversation_manager(data_root: str = "data"):
-    """获取共享的对话管理器实例"""
-    global _conversation_manager
-    if _conversation_manager is None:
-        _conversation_manager = create_conversation_manager(data_root)
-    return _conversation_manager
 
 
 # 列表API函数
@@ -197,39 +185,11 @@ def get_configs(data_root: str = "data") -> List[Dict[str, Any]]:
     ]
 
 
-def get_conversations(include_archived: bool = False, data_root: str = "data") -> List[Dict[str, Any]]:
-    """
-    获取对话历史列表
-    
-    Args:
-        include_archived: 是否包含已归档的对话，默认为False
-        data_root: 数据根目录，默认为"data"
-        
-    Returns:
-        List[Dict[str, Any]]: 对话信息列表
-    """
-    conversation_manager = _get_conversation_manager(data_root)
-    conversations = conversation_manager.list_conversations(include_archived)
-    return [
-        {
-            "conversation_id": conv.conversation_id,
-            "title": conv.title,
-            "config_id": conv.config_id,
-            "created_date": conv.created_date,
-            "last_updated": conv.last_updated,
-            "message_count": conv.message_count,
-            "tags": conv.tags
-        }
-        for conv in conversations
-    ]
-
-
-def get_all_lists(include_archived: bool = False, data_root: str = "data") -> Union[Dict[str, Any], str]:
+def get_all_lists(data_root: str = "data") -> Union[Dict[str, Any], str]:
     """
     获取所有列表
     
     Args:
-        include_archived: 是否包含已归档的对话，默认为False
         data_root: 数据根目录，默认为"data"
         
     Returns:
@@ -241,7 +201,6 @@ def get_all_lists(include_archived: bool = False, data_root: str = "data") -> Un
     world_books = get_world_books(data_root)
     regex_rules = get_regex_rules(data_root)
     configs = get_configs(data_root)
-    conversations = get_conversations(include_archived, data_root)
     
     response = ListsResponse(
         characters=characters,
@@ -249,8 +208,7 @@ def get_all_lists(include_archived: bool = False, data_root: str = "data") -> Un
         personas=personas,
         world_books=world_books,
         regex_rules=regex_rules,
-        configs=configs,
-        conversations=conversations
+        configs=configs
     )
     
     return response.to_dict()
@@ -358,10 +316,6 @@ if __name__ == "__main__":
     for config in all_lists["configs"]:
         print(f"- {config['name']} ({config['config_id']})")
     
-    print("\n=== 对话历史列表 ===")
-    for conv in all_lists["conversations"]:
-        print(f"- {conv['title']} ({conv['conversation_id'][:8]}...)")
-        print(f"  消息数: {conv['message_count']}, 最后更新: {conv['last_updated']}")
         
     # 创建配置示例
     config_data = {

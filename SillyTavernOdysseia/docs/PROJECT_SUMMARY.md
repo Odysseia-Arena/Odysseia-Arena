@@ -24,7 +24,7 @@ SillyTavern-Odysseia/
 │   │   ├── chat_history_manager.py  # 聊天历史和宏处理
 │   │   ├── regex_rule_manager.py    # 智能正则规则管理器 ⭐ NEW
 │   │   ├── config_manager.py        # 配置组合管理
-│   │   └── conversation_manager.py  # 对话持久化
+│   │   └── conversation_manager.py  # (已废弃)
 │   └── utils/                       # 工具模块
 │       ├── unified_macro_processor.py # 统一宏处理器（函数调用语法）⭐ ENHANCED
 │       └── python_sandbox.py        # Python沙箱（扩展函数库）⭐ ENHANCED
@@ -37,7 +37,7 @@ SillyTavern-Odysseia/
 │   ├── personas/                   # 玩家卡文件
 │   ├── world_books/                # 通用世界书
 │   ├── configs/                    # 配置组合
-│   └── conversations/              # 对话历史
+│   └── conversations/              # (已废弃)
 ├── 📖 docs/                        # 文档
 │   ├── API.md                      # API参考
 │   └── MACROS.md                   # 宏系统文档
@@ -88,10 +88,7 @@ SillyTavern-Odysseia/
 - ✅ 配置快速切换
 - ✅ 标签和元数据支持
 
-### 7. 💾 对话管理 (`ConversationManager`)
-- ✅ 对话保存和加载
-- ✅ 归档和导出功能
-- ✅ 元数据管理
+### 7. 💾 对话管理 (`ConversationManager`) (已废弃)
 
 ### 8. 🔄 格式转换工具
 - ✅ SillyTavern角色卡转换

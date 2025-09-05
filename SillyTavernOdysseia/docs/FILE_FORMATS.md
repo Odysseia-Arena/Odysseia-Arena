@@ -12,9 +12,7 @@ data/
 ├── world_books/       # 通用世界书 (.json)
 ├── configs/           # 配置组合 (.json)
 ├── regex_rules/       # 正则规则文件 (.json)
-└── conversations/     # 对话历史 (.json)
-    ├── current/       # 当前对话
-    └── archived/      # 已归档对话
+└── conversations/     # (已废弃) 对话历史
 ```
 
 ## 🎭 角色卡格式
@@ -418,36 +416,7 @@ python scripts/convert_tavern_personas.py <输入文件> --convert
 }
 ```
 
-## 💬 对话历史格式
-
-```json
-{
-  "conversation_id": "对话ID",
-  "title": "对话标题",
-  "config_id": "使用的配置ID",
-  "messages": [
-    {
-      "role": "user",
-      "content": "用户消息",
-      "timestamp": "2025-01-01T12:00:00Z"
-    },
-    {
-      "role": "assistant", 
-      "content": "AI回复",
-      "timestamp": "2025-01-01T12:00:05Z"
-    }
-  ],
-  "metadata": {
-    "total_messages": 2,
-    "user_messages": 1,
-    "assistant_messages": 1,
-    "triggered_world_book_entries": 0
-  },
-  "tags": ["标签"],
-  "created_date": "2025-01-01",
-  "last_modified": "2025-01-01"
-}
-```
+## 💬 对话历史格式 (已废弃)
 
 ## 🎲 宏变量格式
 

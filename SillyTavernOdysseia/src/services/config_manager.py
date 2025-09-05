@@ -238,7 +238,7 @@ class ConfigManager:
         
         return manager
     
-    def _merge_additional_world_book(self, manager: ChatHistoryManager, world_book_data: Dict[str, Any]) -> None:
+    def merge_additional_world_book(self, manager: ChatHistoryManager, world_book_data: Dict[str, Any]) -> None:
         """将通用世界书合并到管理器中"""
         if "world_book" not in world_book_data:
             return

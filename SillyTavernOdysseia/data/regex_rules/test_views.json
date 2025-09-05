@@ -7,8 +7,8 @@
     "replace_regex": "[原始数据已修改]",
     "targets": ["user", "assistant_response", "world_book", "preset"],
     "placement": "after_macro",
-    "views": ["original"],
-    "description": "修改原始数据，影响所有视图"
+    "views": ["user_view", "assistant_view"],
+    "description": "修改原始数据，现在明确影响用户和AI视图"
   },
   {
     "id": "user_view_rule",
@@ -16,10 +16,10 @@
     "enabled": true,
     "find_regex": "敏感信息",
     "replace_regex": "[敏感信息已隐藏]",
-    "targets": ["user", "assistant_response"],
+    "targets": ["user", "assistant"],
     "placement": "after_macro",
-    "views": ["user_view"],
-    "description": "隐藏敏感信息，只在用户视图中生效"
+    "views": ["user_view", "assistant_view"],
+    "description": "隐藏敏感信息，应同时作用于user和assistant(包括assistant_response)"
   },
   {
     "id": "assistant_view_rule",
@@ -51,7 +51,7 @@
     "replace_regex": "[宏前内容已修改]",
     "targets": ["preset", "world_book"],
     "placement": "before_macro_skip",
-    "views": ["original"],
+    "views": ["user_view", "assistant_view"],
     "description": "在宏处理前应用规则，但跳过宏内部"
   },
   {
@@ -62,7 +62,7 @@
     "replace_regex": "{{current_user}}",
     "targets": ["preset", "world_book"],
     "placement": "before_macro_include",
-    "views": ["original"],
+    "views": ["user_view", "assistant_view"],
     "description": "在宏处理前应用规则，包括宏内部"
   },
   {
@@ -73,7 +73,7 @@
     "replace_regex": "[深度范围内]",
     "targets": ["preset", "world_book"],
     "placement": "after_macro",
-    "views": ["original"],
+    "views": ["user_view", "assistant_view"],
     "min_depth": 2,
     "max_depth": 5,
     "description": "只在深度2-5范围内生效"
@@ -86,7 +86,7 @@
     "replace_regex": "[次序范围内]",
     "targets": ["preset", "world_book"],
     "placement": "after_macro",
-    "views": ["original"],
+    "views": ["user_view", "assistant_view"],
     "min_order": 50,
     "max_order": 150,
     "description": "只在次序50-150范围内生效"
@@ -110,7 +110,7 @@
     "replace_regex": "[条件测试已修改]",
     "targets": ["user", "assistant_response", "world_book"],
     "placement": "after_macro",
-    "views": ["original"],
+    "views": ["user_view", "assistant_view"],
     "min_depth": 1,
     "max_depth": 10,
     "min_order": 1,

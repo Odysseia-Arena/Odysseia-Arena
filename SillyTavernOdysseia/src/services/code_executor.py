@@ -57,3 +57,11 @@ class CodeExecutor:
         code_block = character_data.get("code_block")
         char_name = character_data.get("name", "Unknown Character")
         self.execute_code_block(code_block, f"角色: {char_name}", "char")
+
+    def reset(self) -> None:
+        """重置执行器状态"""
+        # CodeExecutor 的状态实际上由 MacroManager 管理，
+        # 因为所有代码执行都通过宏进行。
+        # 因此，重置 CodeExecutor 意味着重置 MacroManager 的变量。
+        print("🔄 重置 CodeExecutor 状态...")
+        self.macro_manager.clear_variables()

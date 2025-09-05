@@ -20,7 +20,7 @@
         "keys": ["学习", "知识", "教学"],
         "content": "这是一个学习友好的环境，鼓励提问和探索。",
         "enabled": true,
-        "mode": "conditional",
+        "mode": "always",
         "position": "system",
         "group_weight": 80,
         "probability": 100,

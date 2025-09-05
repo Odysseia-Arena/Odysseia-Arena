@@ -18,8 +18,8 @@
 #### 请求所有格式
 ```json
 {
-  "session_id": "demo_character_msg",
-  "config_id": "test_config",
+  "character": {},
+  "preset": {},
   "input": null,
   "output_formats": ["raw", "processed", "clean"]
 }
@@ -28,8 +28,8 @@
 #### 只请求clean格式
 ```json
 {
-  "session_id": "demo_character_msg_clean",
-  "config_id": "test_config", 
+  "character": {},
+  "preset": {},
   "input": null,
   "output_formats": ["clean"]
 }
@@ -40,7 +40,7 @@
 #### 请求所有格式的响应
 ```json
 {
-  "source_id": "demo_character_msg",
+  "source_id": "req_...",
   "is_character_message": true,
   "processing_info": {
     "config_loaded": true,
@@ -123,8 +123,8 @@
     ]
   },
   "request": {
-    "session_id": "demo_character_msg",
-    "config_id": "test_config",
+    "character": {},
+    "preset": {},
     "input": null,
     "output_formats": ["raw", "processed", "clean"]
   }
@@ -134,7 +134,7 @@
 #### 只请求clean格式的响应
 ```json
 {
-  "source_id": "demo_character_msg_clean",
+  "source_id": "req_...",
   "is_character_message": true,
   "processing_info": {
     "config_loaded": true,
@@ -203,8 +203,8 @@
     ]
   },
   "request": {
-    "session_id": "demo_character_msg_clean",
-    "config_id": "test_config",
+    "character": {},
+    "preset": {},
     "input": null,
     "output_formats": ["clean"]
   }
@@ -225,8 +225,8 @@
 ### 📤 请求格式
 ```json
 {
-  "session_id": "demo_with_input_1",
-  "config_id": "test_config",
+  "character": {},
+  "preset": {},
   "input": [
     {
       "role": "user",
@@ -240,7 +240,7 @@
 ### 📥 完整响应格式
 ```json
 {
-  "source_id": "demo_with_input_1",
+  "source_id": "req_...",
   "is_character_message": false,
   "processing_info": {
     "input_message_count": 1,
@@ -313,8 +313,8 @@
     ]
   },
   "request": {
-    "session_id": "demo_with_input_1",
-    "config_id": "test_config",
+    "character": {},
+    "preset": {},
     "input": [
       {
         "role": "user",
@@ -339,8 +339,8 @@
 ### 📤 请求格式
 ```json
 {
-  "session_id": "demo_with_input_2",
-  "config_id": "test_config",
+  "character": {},
+  "preset": {},
   "input": [
     {
       "role": "user",
@@ -362,7 +362,7 @@
 ### 📥 完整响应格式
 ```json
 {
-  "source_id": "demo_with_input_2",
+  "source_id": "req_...",
   "is_character_message": false,
   "processing_info": {
     "input_message_count": 3,
@@ -467,8 +467,8 @@
     ]
   },
   "request": {
-    "session_id": "demo_with_input_2",
-    "config_id": "test_config",
+    "character": {},
+    "preset": {},
     "input": [
       {
         "role": "user",
@@ -500,8 +500,8 @@
 ### 📤 请求格式
 ```json
 {
-  "session_id": "demo_with_input_3",
-  "config_id": "test_config",
+  "character": {},
+  "preset": {},
   "input": [
     {
       "role": "user",
@@ -519,7 +519,7 @@
 ### 📥 完整响应格式
 ```json
 {
-  "source_id": "demo_with_input_3",
+  "source_id": "req_...",
   "is_character_message": false,
   "processing_info": {
     "input_message_count": 1,
@@ -550,8 +550,8 @@
     ]
   },
   "request": {
-    "session_id": "demo_with_input_3",
-    "config_id": "test_config",
+    "character": {},
+    "preset": {},
     "input": [
       {
         "role": "user",

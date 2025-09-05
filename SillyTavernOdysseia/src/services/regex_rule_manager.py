@@ -83,6 +83,35 @@ class RegexRuleManager:
             print(f"⚠️ 规则加载失败: {e}")
             return 0
 
+    def load_rules_from_data(self, rules_data: List[Dict[str, Any]]) -> int:
+        """
+        从字典列表加载规则
+        
+        Args:
+            rules_data: 包含规则数据的字典列表
+            
+        Returns:
+            加载的规则数量
+        """
+        loaded_count = 0
+        self.rules = []
+        
+        try:
+            for rule_data in rules_data:
+                self._add_rule_from_dict(rule_data)
+                loaded_count += 1
+            
+            # 重新编译和排序规则
+            self._compile_rules()
+            self._sort_rules()
+            
+            print(f"📝 成功从数据加载 {loaded_count} 个正则规则")
+            return loaded_count
+            
+        except Exception as e:
+            print(f"⚠️ 从数据加载规则失败: {e}")
+            return 0
+
     def _add_rule_from_dict(self, rule_data: Dict[str, Any]) -> None:
         """从字典中创建规则并添加到规则列表"""
         try:
@@ -331,7 +360,17 @@ class RegexRuleManager:
         applicable = []
         for rule in self.rules:
             if not rule.enabled: continue
-            if target not in rule.targets: continue
+            
+            # 目标匹配逻辑
+            is_match = False
+            if target in rule.targets:
+                is_match = True
+            # 特殊情况：如果 target 是 assistant_response，那么 targets 包含 assistant 也算匹配
+            elif target == "assistant_response" and "assistant" in rule.targets:
+                is_match = True
+            
+            if not is_match: continue
+            
             if rule.placement != placement: continue
             
             # 新的视图逻辑：规则的views字段必须显式包含目标视图
@@ -358,9 +397,15 @@ class RegexRuleManager:
 
     def _map_source_to_target(self, source_type: str) -> str:
         """将source_type映射到规则的目标类型"""
+        # assistant_response 是一种特殊的 assistant 类型
+        if source_type == "assistant_response":
+            return "assistant_response"
+            
         mapping = {
             "world": "world_book",
-            "char": "assistant_thinking"
+            "char": "assistant_thinking",
+            "chat_history_user": "user",
+            "chat_history_assistant": "assistant"
         }
         return mapping.get(source_type, source_type)
 

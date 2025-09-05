@@ -14,13 +14,10 @@ __description__ = "AI聊天配置管理系统，支持角色卡、预设、世�
 
 from .services.config_manager import create_config_manager, ConfigManager
 from .services.chat_history_manager import create_chat_manager, ChatHistoryManager
-from .services.conversation_manager import create_conversation_manager, ConversationManager
 
 __all__ = [
-    "create_config_manager", 
+    "create_config_manager",
     "ConfigManager",
-    "create_chat_manager", 
+    "create_chat_manager",
     "ChatHistoryManager",
-    "create_conversation_manager", 
-    "ConversationManager"
 ]

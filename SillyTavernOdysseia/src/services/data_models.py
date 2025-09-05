@@ -78,6 +78,15 @@ class ChatMessage:
         """获取合并后的内容（仅在最终输出时使用）"""
         if self.content:
             return self.content
+            
+        # 特殊处理：检查是否存在assistant_response_processing标记
+        for part in self.content_parts:
+            if part.source_id == 'assistant_response_processing':
+                # 如果是处理assistant_response的内容，直接返回它而不是拼接
+                # 这是解决内容重复问题的根本方法
+                return part.content
+                
+        # 一般情况下使用\n\n连接所有内容部分
         return "\n\n".join(part.content for part in self.content_parts)
     
     def has_multiple_sources(self) -> bool:

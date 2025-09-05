@@ -17,7 +17,6 @@
 - ✅ **角色卡消息**：当无输入时返回角色卡的所有message
 - ✅ **完整处理**：集成宏处理、Python沙盒、世界书等功能
 - ✅ **Python宏支持**：通过安全的沙盒环境，健壮地支持Python代码执行和宏处理
-- ✅ **对话管理**：自动保存和加载对话历史
 
 ## 💡 **核心概念**
 
@@ -71,9 +70,12 @@ api = create_chat_api(data_root="data")
 
 # 2. 构造请求（推荐使用JSON格式）
 # 这是一个包含完整对话历史的请求
+# 注意：不再使用 config_id，而是直接内联数据
 conversation_request = {
-    "session_id": "user_session_123",
-    "config_id": "your_config_id",  # 替换为你的配置ID
+    "character": { "...": "..." },          # 角色卡数据
+    "preset": { "...": "..." },             # 预设数据
+    "additional_world_book": { "...": "..." }, # 额外世界书数据
+    "regex_rules": [{ "...": "..." }],      # 正则规则列表
     "input": [
         {"role": "user", "content": "你好，我想了解一下Python宏。"},
         {"role": "assistant", "content": "当然！Python宏非常强大。你可以使用 {{python:1+1}} 来执行简单的计算。"},
@@ -84,8 +86,8 @@ conversation_request = {
 
 # 🌟 新功能：包含assistant_response的请求
 conversation_with_response_request = {
-    "session_id": "user_session_456", 
-    "config_id": "your_config_id",
+    "character": { "...": "..." },
+    "preset": { "...": "..." },
     "input": [
         {"role": "user", "content": "你好，我想了解Python宏。"}
     ],
@@ -129,8 +131,8 @@ for message in response.processed_prompt:
 # 5. 获取角色欢迎语（无输入历史）
 # 当 "input" 字段为 null 或不提供时，API会返回角色卡的欢迎消息
 welcome_request = {
-    "session_id": "user_session_456",
-    "config_id": "your_config_id",
+    "character": { "...": "..." },
+    "preset": { "...": "..." },
     "input": None
 }
 welcome_response = api.chat_input_json(welcome_request)
@@ -156,11 +158,8 @@ for message in processed_messages:
         print(f"  - 处理后的Assistant响应: {message['content']}")
         # 可以看到宏已被执行，正则已被应用
 
-# 6. (向后兼容) 传统接口
-# 尽管仍然可用，但功能有限，推荐迁移到JSON接口
-legacy_response = api.chat_input(session_id="legacy_session", config_id="your_config_id", user_input="你好！")
-print("\n✅ 传统接口响应 (processed_prompt):")
-print(legacy_response.processed_prompt_with_regex)
+# 6. (已废弃) 传统接口
+# 依赖 config_id 的旧接口已被移除
 ```
 
 #### 接口定义
@@ -173,38 +172,39 @@ def chat_input_json(request_data: Union[str, Dict[str, Any], ChatRequest]) -> Ch
 **输入格式（JSON）:**
 ```json
 {
-  "session_id": "会话ID",
-  "config_id": "配置ID",
+  "request_id": "请求ID (可选, 自动生成)",
+  
+  "character": { "...": "角色卡JSON对象" },
+  "persona": { "...": "玩家卡JSON对象" },
+  "preset": { "...": "预设JSON对象" },
+  "additional_world_book": { "...": "额外世界书JSON对象" },
+  "regex_rules": [{ "...": "规则1" }, { "...": "规则2" }],
+  
   "input": [
     {"role": "user", "content": "你好"},
-    {"role": "assistant", "content": "你好！"},
-    {"role": "user", "content": "今天天气怎么样？"}
+    {"role": "assistant", "content": "你好！"}
   ],
   "output_formats": ["clean"]
 }
 ```
 
 **输入参数详解:**
-- `session_id`: 会话ID，用于标识和存储对话历史
-- `config_id`: 配置ID，指定使用的预设、角色卡、额外世界书配置
-- `input`: OpenAI格式的消息数组（完整对话历史）。如果为None，则返回角色卡的message字段内容
-- `output_formats`: 指定需要的输出格式列表（只需选择基础格式即可，系统会自动提供两个视图）：
+- `request_id`: (可选) 唯一标识一次请求，如果未提供将自动生成。
+- `character`: (可选) 角色卡数据对象
+- `persona`: (可选) 玩家卡数据对象
+- `preset`: (可选) 预设数据对象
+- `additional_world_book`: (可选) 额外世界书数据对象
+- `regex_rules`: (可选) 正则规则对象列表
+- `input`: (可选) OpenAI格式的消息数组（完整对话历史）。如果为None，则返回角色卡的message字段内容
+- `output_formats`: (可选) 指定需要的输出格式列表（只需选择基础格式即可，系统会自动提供两个视图）：
   - `"raw"`: 原始提示词，包含所有条目（全量调试用）
   - `"processed"`: 已处理但保留来源信息（分析和UI显示用）
   - `"clean"`: 标准OpenAI格式（API调用用，推荐）
   
   **重要**：无论请求哪种格式，系统都会为该格式同时返回用户视图和AI视图的提示词。
 
-##### 向后兼容：传统输入接口
-```python
-def chat_input(session_id: str, config_id: str, user_input: Optional[str] = None, output_formats: Optional[List[str]] = None) -> ChatResponse
-```
-
-**参数说明:**
-- `session_id`: 会话ID，用于标识和存储对话历史
-- `config_id`: 配置ID，指定使用的预设、角色卡、额外世界书配置
-- `user_input`: 可选的用户输入内容。如果为None，则返回角色卡的message字段内容
-- `output_formats`: 输出格式列表（同上）
+##### (已废弃) 传统输入接口
+依赖 `config_id` 的 `chat_input` 方法已被移除，请使用 `chat_input_json` 接口。
 
 ##### 🌟 输出接口
 
@@ -212,7 +212,7 @@ def chat_input(session_id: str, config_id: str, user_input: Optional[str] = None
 ```python
 @dataclass
 class ChatResponse:
-    source_id: str                              # 来源ID
+    source_id: str                              # 来源ID，即请求ID
     
     # 内部字段，保存三种格式的用户视图
     raw_prompt_with_regex: Optional[List[Dict[str, Any]]] = None      # 原始格式的用户视图
@@ -228,7 +228,7 @@ class ChatResponse:
 **JSON输出格式:**
 ```json
 {
-  "source_id": "会话ID",
+  "source_id": "请求ID",
   "is_character_message": false,
   "processing_info": {...},
   
@@ -378,8 +378,8 @@ class ChatResponse:
 ```python
 # 请求所有三种格式
 request = {
-    "session_id": "demo",
-    "config_id": "test",
+    "character": {}, # 示例中省略数据
+    "preset": {},    # 示例中省略数据
     "input": [{"role": "user", "content": "你好"}],
     "output_formats": ["raw", "processed", "clean"]
 }
@@ -664,7 +664,7 @@ config_manager = create_config_manager(data_root="data")
 
 ### ConversationManager
 
-对话管理器，负责对话的持久化存储，包括保存、加载、归档和删除对话历史。
+（已废弃）对话管理器，不再负责对话的持久化存储。
 
 ## 文件格式
 
@@ -893,7 +893,6 @@ for block_result in result["results"]:
 - ✅ 成功加载配置组合（预设+角色卡+玩家卡+世界书）
 - ✅ 正确返回角色卡的所有message消息
 - ✅ 自动触发条件世界书条目
-- ✅ 自动保存和加载对话历史
 - ✅ 完整的对话流程管理
 
 ## 📋 **功能特性总览**
@@ -904,10 +903,7 @@ for block_result in result["results"]:
 - 支持配置列表和切换
 
 ### 2. 对话管理
-- 自动会话创建和管理
-- 持久化对话历史存储
-- 支持对话加载和恢复
-- 对话状态清理
+- (无状态，无需管理)
 
 ### 3. 世界书系统
 - 条件触发世界书条目
@@ -968,7 +964,7 @@ for block_result in result["results"]:
 ### 📋 **通用建议**
 
 1. **配置管理**: 先创建完整的配置组合，包含所需的所有组件
-2. **会话管理**: 使用唯一的session_id来管理不同的对话会话
+2. **会话管理**: (无状态，无需管理)
 3. **错误处理**: API内置了完整的错误处理和降级机制
 4. **性能优化**: 对话历史和配置会被自动缓存
 5. **扩展性**: 支持添加新的配置组件和自定义处理逻辑
@@ -978,8 +974,8 @@ for block_result in result["results"]:
 ```python
 # ✅ 推荐：使用JSON输入格式
 request = {
-    "session_id": "user_001",
-    "config_id": "my_config",
+    "character": char_data,
+    "preset": preset_data,
     "input": conversation_history,  # 完整对话历史
     "output_formats": ["clean"]     # 只要最终格式
 }

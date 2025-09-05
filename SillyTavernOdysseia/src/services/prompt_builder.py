@@ -103,29 +103,47 @@ class PromptBuilder:
             print(f"🎉 RAW阶段完成，包含 {len(self.raw_prompt)} 个消息块")
             return self.raw_prompt
 
-        # ===== 阶段2：PROCESSED - 执行宏和正则处理 =====
-        print("⚙️ 阶段2：执行PROCESSED处理（宏处理前正则 → 宏、代码执行 → 宏处理后正则）")
-        processed_messages = self._build_processed_messages(raw_messages, all_sources, world_book_entries)
+        # ===== 阶段2 & 3：PROCESSED 和 CLEAN - 为每个视图独立处理 =====
+        # 用户视图
+        print("⚙️ 阶段2/3：为 User View 构建 Processed 和 Clean 提示词")
+        user_processed_messages = self._build_view_specific_messages(all_sources, world_book_entries, view="user_view")
+        user_clean_messages = self._build_clean_messages(user_processed_messages)
         
-        # 生成两个视图的PROCESSED提示词
-        self.processed_prompt = [msg.to_openai_format() for msg in processed_messages]
-        
-        if view_type == "processed":
-            print(f"🎉 PROCESSED阶段完成，包含 {len(self.processed_prompt)} 个消息块")
-            return self.processed_prompt
+        # AI 视图
+        print("⚙️ 阶段2/3：为 Assistant View 构建 Processed 和 Clean 提示词")
+        assistant_processed_messages = self._build_view_specific_messages(all_sources, world_book_entries, view="assistant_view")
+        assistant_clean_messages = self._build_clean_messages(assistant_processed_messages)
 
-        # ===== 阶段3：CLEAN - 合并操作 =====
-        print("🧹 阶段3：执行CLEAN处理（合并相邻消息）")
-        clean_messages = self._build_clean_messages(processed_messages)
+        # 根据请求的视图类型返回结果
+        # 注意：为了API兼容性，我们将用户视图和AI视图的结果分别存储并返回
+        # ChatResponse层将负责根据请求格式构建最终的JSON
         
-        # 生成两个视图的CLEAN提示词
-        self.clean_prompt = [
-            {k: v for k, v in msg.to_openai_format().items() if not k.startswith('_')}
-            for msg in clean_messages
-        ]
+        # PROCESSED 阶段结果
+        self.processed_prompt = [msg.to_openai_format() for msg in user_processed_messages]
+        # AI视图的processed结果可以在需要时单独获取
         
-        print(f"🎉 CLEAN阶段完成，包含 {len(self.clean_prompt)} 个消息块")
-        return self.clean_prompt
+        # CLEAN 阶段结果
+        self.clean_prompt = [{k: v for k, v in msg.to_openai_format().items() if not k.startswith('_')} for msg in user_clean_messages]
+        # AI视图的clean结果
+        assistant_clean_prompt = [{k: v for k, v in msg.to_openai_format().items() if not k.startswith('_')} for msg in assistant_clean_messages]
+        
+        # 为了让调用者能够访问两个视图，我们将AI视图的结果存储在一个临时属性中
+        # ChatResponse 将会把 user_view 和 assistant_view 组合起来
+        self.processed_prompt_user_view = self.processed_prompt
+        self.processed_prompt_assistant_view = [msg.to_openai_format() for msg in assistant_processed_messages]
+        self.clean_prompt_user_view = self.clean_prompt
+        self.clean_prompt_assistant_view = assistant_clean_prompt
+
+        print(f"🎉 所有视图处理完成")
+        
+        # 返回一个默认值或根据view_type选择
+        if view_type == "processed_with_regex":
+             return self.processed_prompt_user_view
+        if view_type == "clean_with_regex":
+             return self.clean_prompt_user_view
+             
+        # 默认返回 user_view 的 processed 结果
+        return self.processed_prompt
 
     def _build_raw_messages(self, all_sources: List[Dict[str, Any]], world_book_entries: List[WorldBookEntry]) -> List[ChatMessage]:
         """
@@ -187,44 +205,51 @@ class PromptBuilder:
         
         return raw_messages
 
-    def _build_processed_messages(self, raw_messages: List[ChatMessage], all_sources: List[Dict[str, Any]], world_book_entries: List[WorldBookEntry]) -> List[ChatMessage]:
+    def _build_view_specific_messages(self, all_sources: List[Dict[str, Any]], world_book_entries: List[WorldBookEntry], view: str) -> List[ChatMessage]:
         """
-        构建PROCESSED阶段的消息 - 重新处理所有源，执行完整的处理流程
-        
-        处理顺序：宏处理前正则 → 宏、代码执行 → 宏处理后正则
+        为特定视图构建PROCESSED阶段的消息
         
         Args:
-            raw_messages: RAW阶段的消息列表（用于参考）
             all_sources: 所有消息来源列表
             world_book_entries: 世界书条目列表
+            view: 目标视图 ("user_view" or "assistant_view")
             
         Returns:
-            PROCESSED阶段的消息列表
+            为特定视图处理后的消息列表
         """
+        # 为每个视图重置代码执行器状态，确保隔离
+        self.code_executor.reset()
+        self.macro_manager.clear_variables()
+        self.evaluator.clear_enabled_cache(world_book_entries)
+        self.evaluator.clear_enabled_cache([])
+
         processed_messages: List[ChatMessage] = []
         
         for source in all_sources:
             item = source["data"]
-            source_type = source["type"]
-            depth = source.get("depth")
-            order = source.get("order")
+            
+            # 创建源的深拷贝以避免视图间互相影响
+            source_clone = {
+                "data": self._clone_item(item),
+                "type": source["type"],
+                "order": source.get("order"),
+                "role": source.get("role"),
+                "depth": source.get("depth"),
+                "position": source.get("position"),
+                "internal_order": source.get("internal_order")
+            }
+            item_clone = source_clone["data"]
 
-            # 评估enabled状态 (聊天历史消息总是启用)
-            if not isinstance(item, ChatMessage):
-                if not self.evaluator.evaluate_enabled(item):
-                    print(f"⏭️  跳过禁用条目: {getattr(item, 'name', '') or getattr(item, 'identifier', '')} ({source_type})")
+            if not isinstance(item_clone, ChatMessage):
+                if not self.evaluator.evaluate_enabled(item_clone):
                     continue
+                if hasattr(item_clone, "code_block") and item_clone.code_block:
+                    scope = "preset" if isinstance(item_clone, PresetPrompt) else "world"
+                    self.code_executor.execute_code_block(item_clone.code_block, item_clone.name, scope)
+                    self.evaluator.clear_enabled_cache(world_book_entries)
+                    self.evaluator.clear_enabled_cache([])
 
-            # 执行code_block (聊天历史消息没有code_block)
-            if not isinstance(item, ChatMessage) and hasattr(item, "code_block") and item.code_block:
-                scope = "preset" if source_type == "preset" else "world"
-                self.code_executor.execute_code_block(item.code_block, item.name, scope)
-                # 执行代码后，清空缓存，以便后续评估使用最新状态
-                self.evaluator.clear_enabled_cache(world_book_entries)
-                self.evaluator.clear_enabled_cache([])  # 清空预设缓存
-
-            # 处理消息内容
-            message = self._process_source_content_for_processed(source, world_book_entries)
+            message = self._process_source_content_for_processed(source_clone, world_book_entries, view=view)
             if message:
                 processed_messages.append(message)
         
@@ -243,15 +268,14 @@ class PromptBuilder:
         # 合并相邻的相同角色消息
         return self._merge_adjacent_roles(processed_messages)
 
-    def _process_source_content_for_processed(self, source: Dict[str, Any], world_book_entries: List[WorldBookEntry]) -> Optional[ChatMessage]:
+    def _process_source_content_for_processed(self, source: Dict[str, Any], world_book_entries: List[WorldBookEntry], view: str) -> Optional[ChatMessage]:
         """
-        为PROCESSED阶段处理单个来源的内容
-        
-        按照新的处理顺序：先构建消息 → 检查是否包含relative → 应用正则处理
+        为PROCESSED阶段处理单个来源的内容，并应用特定视图的正则规则
         
         Args:
             source: 消息源信息
             world_book_entries: 世界书条目列表
+            view: 目标视图 ("user_view" or "assistant_view")
             
         Returns:
             处理后的ChatMessage，如果内容为空则返回None
@@ -275,34 +299,35 @@ class PromptBuilder:
             
             if is_assistant_response_processing:
                 # 对 assistant_response_processing 消息进行完整的宏和正则处理
-                for content_part in message.content_parts:
-                    original_content = content_part.content
+                for part in message.content_parts:
+                    processed_content = part.content
                     
-                    # 应用宏处理前的正则（如果需要）
-                    processed_content = original_content
-                    if self.regex_rule_manager and self._should_apply_regex_to_message(message):
-                        processed_content = self._apply_regex_before_macro_skip(processed_content, "conversation", depth, order)
-                        processed_content = self._apply_regex_before_macro_include(processed_content, "conversation", depth, order)
-                    
-                    # 处理宏
-                    processed_content = self.macro_manager.process_string(processed_content, 'conversation')
-                    
-                    # 应用宏处理后的正则（如果需要）
-                    if self.regex_rule_manager and self._should_apply_regex_to_message(message):
+                    # 应用宏处理前的正则
+                    if self.regex_rule_manager:
                         processed_content = self.regex_rule_manager.apply_regex_to_content(
-                            content=processed_content,
-                            source_type="conversation",
-                            depth=depth,
-                            order=order,
-                            placement="after_macro"
+                            content=processed_content, source_type="assistant_response", depth=depth, order=order,
+                            placement="before_macro_skip", view=view
+                        )
+                        processed_content = self.regex_rule_manager.apply_regex_to_content(
+                            content=processed_content, source_type="assistant_response", depth=depth, order=order,
+                            placement="before_macro_include", view=view
                         )
                     
-                    # 更新内容
-                    content_part.content = processed_content
+                    # 处理宏
+                    processed_content = self.macro_manager.process_string(processed_content, 'conversation') # 宏作用域仍然是 conversation
+                    
+                    # 应用宏处理后的正则
+                    if self.regex_rule_manager:
+                        processed_content = self.regex_rule_manager.apply_regex_to_content(
+                            content=processed_content, source_type="assistant_response", depth=depth, order=order,
+                            placement="after_macro", view=view
+                        )
+                    
+                    part.content = processed_content
             else:
                 # 普通聊天历史消息：只应用正则
                 if self.regex_rule_manager and self._should_apply_regex_to_message(message):
-                    self._apply_regex_to_chat_message(message, depth, order)
+                    self._apply_regex_to_chat_message(message, depth, order, view=view)
             
             return message
 
@@ -349,8 +374,8 @@ class PromptBuilder:
         # 对于非relative的消息，按完整顺序处理
         if self.regex_rule_manager:
             # 阶段1：应用宏处理前的正则替换
-            content = self._apply_regex_before_macro_skip(content, source_type, depth, order)
-            content = self._apply_regex_before_macro_include(content, source_type, depth, order)
+            content = self._apply_regex_before_macro_skip(content, source_type, depth, order, view=view)
+            content = self._apply_regex_before_macro_include(content, source_type, depth, order, view=view)
 
         # 阶段2：处理宏
         scope = "preset" if source_type == "preset" else "world"
@@ -363,7 +388,8 @@ class PromptBuilder:
                 source_type=source_type,
                 depth=depth,
                 order=order,
-                placement="after_macro"
+                placement="after_macro",
+                view=view
             )
 
         # 更新消息内容
@@ -413,12 +439,22 @@ class PromptBuilder:
 
         # 收集预设和世界书
         for item in preset_prompts + world_book_entries:
-            # 'relative' 类型的预设和 'always' 类型的世界书在这里处理
+            # 'relative' 类型的预设在这里处理
             if isinstance(item, PresetPrompt) and item.position != "relative":
                 continue
-            if isinstance(item, WorldBookEntry) and item.mode not in ["always", "before_char", "after_char"]:
-                 if item.mode != 'conditional' or item.id not in triggered_entries:
+            
+            # 世界书的处理逻辑
+            if isinstance(item, WorldBookEntry):
+                # 排除专门由 worldInfo 占位符处理的条目
+                if item.position in ["before_char", "after_char"]:
                     continue
+                # 只包括 always 和已触发的 conditional 条目
+                if item.mode == 'always':
+                    pass # 总是包含
+                elif item.mode == 'conditional' and item.id in triggered_entries:
+                    pass # 包含已触发的
+                else:
+                    continue # 其他情况跳过
 
             sources.append({
                 "data": item,
@@ -433,39 +469,43 @@ class PromptBuilder:
         # 排序
         sources = self._sort_by_order_rules(sources)
 
-        # 合并聊天历史和 in-chat 预设
-        in_chat_items = [
-            {"data": msg, "type": "chat_history", "depth": 10000 + i, "order": 10000 + i, "role": msg.role, "internal_order": 10000 + i}
-            for i, msg in enumerate(chat_history)
-        ]
-        in_chat_items.extend([
+        # 收集 in-chat 预设并排序
+        in_chat_presets = [
             {
                 "data": p,
                 "type": "preset",
                 "depth": p.depth or 0,
                 "order": p.order or 100,
                 "role": MessageRole(p.role),
-                "position": p.position,  # 添加position信息
+                "position": p.position,
                 "internal_order": len(sources) + i
             }
             for i, p in enumerate(preset_prompts) if p.position == "in-chat"
-        ])
+        ]
+        sorted_in_chat_presets = self._sort_by_order_rules(in_chat_presets)
         
-        # 对 in-chat 内容进行排序
-        sorted_in_chat = self._sort_by_order_rules(in_chat_items)
+        # 创建聊天历史记录项（不排序）
+        chat_history_items = [
+            {"data": msg, "type": "chat_history", "depth": 10000 + i, "order": 10000 + i, "role": msg.role, "internal_order": 10000 + i}
+            for i, msg in enumerate(chat_history)
+        ]
+
+        # 合并聊天历史和已排序的 in-chat 预设
+        # 决定插入顺序：这里简单地将预设放在历史记录之前，可以根据需要调整
+        combined_in_chat = sorted_in_chat_presets + chat_history_items
 
         # 将聊天历史和 in-chat 预设插入到 'chatHistory' 占位符的位置
         final_sources = []
         chat_history_inserted = False
         for source in sources:
             if isinstance(source["data"], PresetPrompt) and source["data"].identifier == "chatHistory":
-                final_sources.extend(sorted_in_chat)
+                final_sources.extend(combined_in_chat)
                 chat_history_inserted = True
             else:
                 final_sources.append(source)
         
         if not chat_history_inserted:
-             final_sources.extend(sorted_in_chat)
+            final_sources.extend(combined_in_chat)
 
         return final_sources
 
@@ -534,7 +574,7 @@ class PromptBuilder:
         }
         return mapping.get(position, MessageRole.SYSTEM)
 
-    def _apply_regex_before_macro_skip(self, content: str, source_type: str, depth: Optional[int] = None, order: Optional[int] = None, view: str = "original") -> str:
+    def _apply_regex_before_macro_skip(self, content: str, source_type: str, depth: Optional[int] = None, order: Optional[int] = None, view: str = "user_view") -> str:
         """
         应用宏处理前的正则替换，但跳过宏的内部字符
         
@@ -600,7 +640,7 @@ class PromptBuilder:
         
         return result
 
-    def _apply_regex_before_macro_include(self, content: str, source_type: str, depth: Optional[int] = None, order: Optional[int] = None, view: str = "original") -> str:
+    def _apply_regex_before_macro_include(self, content: str, source_type: str, depth: Optional[int] = None, order: Optional[int] = None, view: str = "user_view") -> str:
         """
         应用宏处理前的正则替换，包括宏的内部字符
         
@@ -618,7 +658,7 @@ class PromptBuilder:
             view=view
         )
         
-    def _apply_regex_to_chat_message(self, message: ChatMessage, depth: Optional[int] = None, order: Optional[int] = None, view: str = "original") -> None:
+    def _apply_regex_to_chat_message(self, message: ChatMessage, depth: Optional[int] = None, order: Optional[int] = None, view: str = "user_view") -> None:
         """
         对聊天消息的每个内容部分应用正则规则
         
@@ -660,12 +700,27 @@ class PromptBuilder:
         new_message.metadata = message.metadata.copy() if message.metadata else {}
         
         return new_message
+        
+    def _clone_item(self, item: Any) -> Any:
+        """克隆一个源项目（ChatMessage, PresetPrompt, WorldBookEntry）"""
+        if isinstance(item, ChatMessage):
+            return self._clone_chat_message(item)
+        
+        # 对于dataclass，可以简单地通过重新构造函数来克隆
+        # 这假设dataclass的字段是基本类型或不可变类型
+        import copy
+        return copy.deepcopy(item)
 
     def _get_world_info_content(self, world_book_entries: List[WorldBookEntry], position: str) -> str:
         """获取特定位置的世界书内容"""
+        # 修正：这里应该收集所有 position 匹配的条目，无论 mode 是什么
+        # 因为 enabled 状态会在后面评估
         entries = [
-            entry for entry in world_book_entries if entry.position == position and self.evaluator.evaluate_enabled(entry)
+            entry for entry in world_book_entries if entry.position == position
         ]
+        
+        # 过滤掉未启用的条目
+        enabled_entries = [entry for entry in entries if self.evaluator.evaluate_enabled(entry)]
         
         # 排序
         sorted_entries = self._sort_by_order_rules([
@@ -676,7 +731,7 @@ class PromptBuilder:
                 "role": self._map_wb_pos_to_role(entry.position),
                 "depth": entry.depth or 0,
                 "internal_order": i
-            } for i, entry in enumerate(entries)
+            } for i, entry in enumerate(enabled_entries)
         ])
         
         content_list = [entry["data"].content for entry in sorted_entries if entry["data"].content.strip()]

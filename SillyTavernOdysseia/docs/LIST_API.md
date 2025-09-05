@@ -11,7 +11,6 @@
 - ✅ **世界书列表**：获取所有可用世界书
 - ✅ **正则规则列表**：获取所有可用正则规则
 - ✅ **配置列表**：获取所有配置
-- ✅ **对话历史列表**：获取所有对话历史
 - ✅ **创建配置**：创建新的配置组合
 
 ## 🚀 **使用方法**
@@ -26,7 +25,6 @@ from src.list_api import (
     get_world_books,
     get_regex_rules,
     get_configs,
-    get_conversations,
     get_all_lists,
     create_config
 )
@@ -35,8 +33,8 @@ from src.list_api import (
 ### 获取所有列表
 
 ```python
-# 获取所有列表（包括角色卡、预设、用户、世界书、正则规则、配置、对话历史）
-all_lists = get_all_lists(include_archived=False, data_root="data")
+# 获取所有列表（包括角色卡、预设、用户、世界书、正则规则、配置）
+all_lists = get_all_lists(data_root="data")
 
 # 输出格式
 {
@@ -54,18 +52,6 @@ all_lists = get_all_lists(include_archived=False, data_root="data")
       "tags": ["tag1", "tag2"],
       "created_date": "2025-08-31T...",
       "last_used": "2025-08-31T..."
-    },
-    ...
-  ],
-  "conversations": [
-    {
-      "conversation_id": "conv1",
-      "title": "对话1",
-      "config_id": "config1",
-      "created_date": "2025-08-31T...",
-      "last_updated": "2025-08-31T...",
-      "message_count": 10,
-      "tags": ["tag1", "tag2"]
     },
     ...
   ]
@@ -114,13 +100,6 @@ regex_rules = get_regex_rules(data_root="data")
 ```python
 configs = get_configs(data_root="data")
 # 返回: [{"config_id": "...", "name": "...", ...}, ...]
-```
-
-#### 获取对话历史列表
-
-```python
-conversations = get_conversations(include_archived=False, data_root="data")
-# 返回: [{"conversation_id": "...", "title": "...", ...}, ...]
 ```
 
 ### 创建新配置
